@@ -1,0 +1,54 @@
+{
+  "name": "py-auth-client",
+  "version": "0.0.1",
+  "description": "TypeScript/Node.js client for py-auth (compatible with Python/Go clients)",
+  "keywords": [
+    "auth",
+    "licensing",
+    "client",
+    "fernet"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Paper-Dragon/py-auth.git",
+    "directory": "client/ts"
+  },
+  "bugs": {
+    "url": "https://github.com/Paper-Dragon/py-auth/issues"
+  },
+  "homepage": "https://github.com/Paper-Dragon/py-auth#readme",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
+    "dev": "tsx example.ts",
+    "prepack": "npm run clean && npm run build"
+  },
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "node-machine-id": "^1.1.12"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.5.0"
+  }
+}
