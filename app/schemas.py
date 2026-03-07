@@ -74,3 +74,13 @@ class ChangePasswordRequest(BaseModel):
     old_password: str
     new_password: str
 
+class ConfigItem(BaseModel):
+    key: str
+    value: Any
+
+    class Config:
+        from_attributes = True
+
+class ConfigUpdate(BaseModel):
+    configs: Dict[str, Any]
+

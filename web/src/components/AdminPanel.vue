@@ -15,6 +15,10 @@
           <el-avatar :size="32">{{ username.charAt(0).toUpperCase() }}</el-avatar>
           <span class="username">{{ username }}</span>
         </div>
+        <el-button size="small" @click="showConfigDialog = true">
+          <el-icon><Setting /></el-icon>
+          <span class="btn-label">配置</span>
+        </el-button>
         <el-button size="small" @click="showChangePasswordDialog = true">
           <el-icon><Key /></el-icon>
           <span class="btn-label">密码</span>
@@ -200,15 +204,21 @@
           <el-button type="primary" @click="handleChangePassword" :loading="changingPassword">确认</el-button>
         </template>
       </el-dialog>
+
+      <!-- 系统配置弹窗 -->
+      <el-dialog v-model="showConfigDialog" title="系统配置" width="90%" style="max-width: 600px;">
+        <ConfigPanel />
+      </el-dialog>
     </main>
   </div>
 </template>
 
 <script setup>
 import { ref, onMounted, onUnmounted, computed } from 'vue'
-import { Lock, Refresh, Box, CircleCheck, CircleClose, Key } from '@element-plus/icons-vue'
+import { Lock, Refresh, Box, CircleCheck, CircleClose, Key, Setting } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { api } from '../api'
+import ConfigPanel from './ConfigPanel.vue'
 
 defineProps({ username: String })
 const emit = defineEmits(['logout'])
@@ -218,6 +228,7 @@ const loading = ref(false)
 const deviceInfoVisible = ref(false)
 const selectedDevice = ref(null)
 const showChangePasswordDialog = ref(false)
+const showConfigDialog = ref(false)
 const changingPassword = ref(false)
 const passwordFormRef = ref(null)
 const passwordForm = ref({ oldPassword: '', newPassword: '', confirmPassword: '' })

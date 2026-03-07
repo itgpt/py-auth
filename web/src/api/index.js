@@ -109,6 +109,18 @@ class ApiService {
       method: 'DELETE'
     })
   }
+
+  // 配置管理
+  async getConfigs() {
+    return this.request('/admin/config')
+  }
+
+  async updateConfigs(configs) {
+    return this.request('/admin/config', {
+      method: 'PUT',
+      body: JSON.stringify({ configs })
+    })
+  }
 }
 
 export const api = new ApiService()

@@ -33,3 +33,13 @@ class User(Base):
     def __repr__(self):
         return f"<User(id={self.id}, username={self.username}, is_admin={self.is_admin})>"
 
+
+class Config(Base):
+    __tablename__ = "config"
+    
+    key = Column(String(255), primary_key=True, index=True)
+    value = Column(JSON, nullable=True)
+
+    def __repr__(self):
+        return f"<Config(key={self.key}, value={self.value})>"
+

@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from datetime import datetime
 import logging
 from app.database import get_db
-from app.models import Device
+from app.models import Device, Config
 from app.schemas import DeviceAuthRequest, EncryptedRequest, EncryptedResponse
 from app.auth import decrypt_request_data, encrypt_response_data
 
@@ -40,12 +40,18 @@ def _process_device(request: DeviceAuthRequest, db: Session) -> Device:
         if request.device_info is not None:
             device.device_info = request.device_info
     else:
+        # 获取默认授权配置
+        default_auth_config = db.query(Config).filter(Config.key == "default_authorization").first()
+        is_authorized = True
+        if default_auth_config is not None:
+            is_authorized = bool(default_auth_config.value)
+
         # 设备不存在：创建新设备
         device = Device(
             device_id=request.device_id,
             software_name=request.software_name,
             device_info=request.device_info,
-            is_authorized=True  # 默认已授权
+            is_authorized=is_authorized
         )
         db.add(device)
     

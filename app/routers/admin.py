@@ -3,8 +3,8 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import OperationalError
 from datetime import datetime
 from app.database import get_db
-from app.models import Device, User
-from app.schemas import DeviceResponse, DeviceUpdate
+from app.models import Device, User, Config
+from app.schemas import DeviceResponse, DeviceUpdate, ConfigItem, ConfigUpdate
 from app.auth import get_current_user
 import logging
 
@@ -98,4 +98,37 @@ async def delete_device(
         raise HTTPException(status_code=404, detail="设备不存在")
     db.commit()
     return {"message": "已删除"}
+
+@router.get("/config")
+async def get_configs(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """获取所有配置（需要登录）"""
+    configs = db.query(Config).all()
+    return {c.key: c.value for c in configs}
+
+@router.put("/config")
+async def update_configs(
+    config_update: ConfigUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """更新配置（需要登录）"""
+    for key, value in config_update.configs.items():
+        config = db.query(Config).filter(Config.key == key).first()
+        if config:
+            config.value = value
+        else:
+            new_config = Config(key=key, value=value)
+            db.add(new_config)
+    
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        logger.error(f"更新配置失败: {e}")
+        raise HTTPException(status_code=500, detail="保存配置失败")
+        
+    return {"message": "配置已更新"}
 
