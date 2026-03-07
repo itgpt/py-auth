@@ -86,12 +86,12 @@
 
 <script setup>
 import { ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { User, Lock } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { api } from '../api'
 
-const emit = defineEmits(['login-success'])
-
+const router = useRouter()
 const formRef = ref(null)
 const formData = ref({
   username: '',
@@ -114,7 +114,6 @@ const handleLogin = async () => {
   if (!formRef.value) return
   
   try {
-    // 先验证表单
     const valid = await formRef.value.validate().catch(() => false)
     if (!valid) return
     
@@ -122,8 +121,9 @@ const handleLogin = async () => {
     error.value = ''
 
     const data = await api.login(formData.value.username, formData.value.password)
+    localStorage.setItem('username', data.username)
     ElMessage.success('登录成功')
-    emit('login-success', data)
+    router.push('/')
   } catch (e) {
     error.value = e.message || '登录失败，请检查用户名和密码'
   } finally {

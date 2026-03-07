@@ -1,6 +1,3 @@
-"""
-用户认证路由
-"""
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from datetime import timedelta
@@ -24,7 +21,6 @@ async def login(
     user_data: UserLogin,
     db: Session = Depends(get_db)
 ):
-    """用户登录"""
     user = authenticate_user(db, user_data.username, user_data.password)
     if not user:
         raise HTTPException(
@@ -55,7 +51,6 @@ async def login(
 async def get_me(
     current_user: User = Depends(get_current_user)
 ):
-    """获取当前用户信息"""
     return current_user
 
 
@@ -63,7 +58,6 @@ async def get_me(
 async def verify_token_endpoint(
     current_user: User = Depends(get_current_user)
 ):
-    """验证令牌是否有效"""
     return {
         "valid": True,
         "username": current_user.username,
@@ -77,27 +71,14 @@ async def change_password(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """更改密码"""
-    # 验证旧密码
     if not verify_password(password_data.old_password, current_user.password_hash):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="旧密码错误"
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="旧密码错误")
     
-    # 验证新密码不能与旧密码相同
     if password_data.old_password == password_data.new_password:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="新密码不能与旧密码相同"
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="新密码不能与旧密码相同")
     
-    # 更新密码
     current_user.password_hash = get_password_hash(password_data.new_password)
     db.commit()
     db.refresh(current_user)
-    
-    return {
-        "message": "密码更改成功"
-    }
+    return {"message": "密码更改成功"}
 

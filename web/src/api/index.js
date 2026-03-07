@@ -121,6 +121,35 @@ class ApiService {
       body: JSON.stringify({ configs })
     })
   }
+
+  // 用户管理
+  async getUsers() {
+    return this.request('/admin/users')
+  }
+
+  async createUser(userData) {
+    return this.request('/admin/users', {
+      method: 'POST',
+      body: JSON.stringify(userData)
+    })
+  }
+
+  async updateUser(userId, userData) {
+    return this.request(`/admin/users/${userId}`, {
+      method: 'PUT',
+      body: JSON.stringify(userData)
+    })
+  }
+
+  async deleteUser(userId) {
+    return this.request(`/admin/users/${userId}`, {
+      method: 'DELETE'
+    })
+  }
+
+  async getMe() {
+    return this.request('/user/me')
+  }
 }
 
 export const api = new ApiService()

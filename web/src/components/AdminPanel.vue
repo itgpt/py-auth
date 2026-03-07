@@ -1,33 +1,6 @@
 <template>
   <div class="admin-panel">
-    <header class="header">
-      <div class="header-left">
-        <div class="header-icon">
-          <el-icon :size="20"><Lock /></el-icon>
-        </div>
-        <div class="header-title">
-          <h1>授权管理</h1>
-          <p>设备授权管理系统</p>
-        </div>
-      </div>
-      <div class="header-right">
-        <div class="user-info">
-          <el-avatar :size="32">{{ username.charAt(0).toUpperCase() }}</el-avatar>
-          <span class="username">{{ username }}</span>
-        </div>
-        <el-button size="small" @click="showConfigDialog = true">
-          <el-icon><Setting /></el-icon>
-          <span class="btn-label">配置</span>
-        </el-button>
-        <el-button size="small" @click="showChangePasswordDialog = true">
-          <el-icon><Key /></el-icon>
-          <span class="btn-label">密码</span>
-        </el-button>
-        <el-button size="small" @click="$emit('logout')">退出</el-button>
-      </div>
-    </header>
-
-    <main class="content">
+    <div class="content">
       <!-- 统计卡片 -->
       <div class="stats">
         <div class="stat-card">
@@ -205,11 +178,7 @@
         </template>
       </el-dialog>
 
-      <!-- 系统配置弹窗 -->
-      <el-dialog v-model="showConfigDialog" title="系统配置" width="90%" style="max-width: 600px;">
-        <ConfigPanel />
-      </el-dialog>
-    </main>
+    </div>
   </div>
 </template>
 
@@ -218,17 +187,14 @@ import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { Lock, Refresh, Box, CircleCheck, CircleClose, Key, Setting } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { api } from '../api'
-import ConfigPanel from './ConfigPanel.vue'
+import { useRouter } from 'vue-router'
 
-defineProps({ username: String })
-const emit = defineEmits(['logout'])
-
+const router = useRouter()
 const devices = ref([])
 const loading = ref(false)
 const deviceInfoVisible = ref(false)
 const selectedDevice = ref(null)
 const showChangePasswordDialog = ref(false)
-const showConfigDialog = ref(false)
 const changingPassword = ref(false)
 const passwordFormRef = ref(null)
 const passwordForm = ref({ oldPassword: '', newPassword: '', confirmPassword: '' })
@@ -253,7 +219,8 @@ const loadDevices = async () => {
     }))
   } catch (e) {
     if (e.message.includes('登录已过期')) {
-      emit('logout')
+      api.logout()
+      router.push('/login')
     } else {
       ElMessage.error(e.message || '加载失败')
     }
@@ -309,7 +276,10 @@ const toggleAuth = async (device, authorize) => {
     })
     ElMessage.success(authorize ? '已授权' : '已取消授权')
   } catch (e) {
-    if (e.message.includes('登录已过期')) emit('logout')
+    if (e.message.includes('登录已过期')) {
+      api.logout()
+      router.push('/login')
+    }
     else ElMessage.error(e.message || '操作失败')
   } finally {
     device._updating = false
@@ -323,7 +293,10 @@ const deleteDevice = async (device) => {
     devices.value = devices.value.filter(d => d.device_id !== device.device_id)
     ElMessage.success('已删除')
   } catch (e) {
-    if (e.message.includes('登录已过期')) emit('logout')
+    if (e.message.includes('登录已过期')) {
+      api.logout()
+      router.push('/login')
+    }
     else ElMessage.error(e.message || '删除失败')
   } finally {
     device._updating = false
@@ -360,7 +333,10 @@ const handleChangePassword = async () => {
     showChangePasswordDialog.value = false
     resetPasswordForm()
   } catch (e) {
-    if (e.message?.includes('登录已过期')) emit('logout')
+    if (e.message?.includes('登录已过期')) {
+      api.logout()
+      router.push('/login')
+    }
     else if (e.message) ElMessage.error(e.message)
   } finally {
     changingPassword.value = false
@@ -379,81 +355,11 @@ onUnmounted(() => {
 
 <style scoped>
 .admin-panel {
-  min-height: 100vh;
-  background: #f5f7fa;
-}
-
-/* Header */
-.header {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  color: white;
-  padding: 12px 20px;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 12px;
-}
-
-.header-left {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.header-icon {
-  width: 36px;
-  height: 36px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(255,255,255,0.2);
-  border-radius: 8px;
-}
-
-.header-title h1 {
-  font-size: 18px;
-  font-weight: 600;
-  margin: 0;
-}
-
-.header-title p {
-  font-size: 12px;
-  opacity: 0.8;
-  margin: 0;
-}
-
-.header-right {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.user-info {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-right: 8px;
-}
-
-.username {
-  font-size: 14px;
-  font-weight: 500;
-}
-
-.header-right .el-button {
-  background: rgba(255,255,255,0.2);
-  border-color: rgba(255,255,255,0.3);
-  color: white;
-}
-
-.header-right .el-button:hover {
-  background: rgba(255,255,255,0.3);
+  width: 100%;
 }
 
 /* Content */
 .content {
-  padding: 16px;
   max-width: 1400px;
   margin: 0 auto;
 }

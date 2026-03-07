@@ -12,8 +12,7 @@ class DeviceAuthRequest(BaseModel):
     software_name: Optional[str] = None  # 软件名
     device_info: Optional[Dict[str, Any]] = None  # 设备信息（JSON格式，包含hostname等）
 
-# 向后兼容：保留 DeviceCreate 作为别名
-DeviceCreate = DeviceAuthRequest
+DeviceCreate = DeviceAuthRequest  # 向后兼容别名
 
 class DeviceResponse(BaseModel):
     id: int
@@ -44,10 +43,16 @@ class EncryptedResponse(BaseModel):
     """加密的响应数据"""
     encrypted_data: str  # AES加密后的base64字符串
 
-# 用户相关
 class UserCreate(BaseModel):
     username: str
     password: str
+    is_admin: Optional[bool] = False
+    is_active: Optional[bool] = True
+
+class UserUpdate(BaseModel):
+    password: Optional[str] = None
+    is_admin: Optional[bool] = None
+    is_active: Optional[bool] = None
 
 class UserLogin(BaseModel):
     username: str
@@ -70,7 +75,6 @@ class TokenResponse(BaseModel):
     is_admin: bool
 
 class ChangePasswordRequest(BaseModel):
-    """更改密码请求"""
     old_password: str
     new_password: str
 

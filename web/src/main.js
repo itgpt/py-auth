@@ -5,14 +5,15 @@ import 'element-plus/theme-chalk/dark/css-vars.css'
 import * as ElementPlusIconsVue from '@element-plus/icons-vue'
 import zhCn from 'element-plus/dist/locale/zh-cn.mjs'
 import App from './App.vue'
+import router from './router'
 import './assets/style.css'
 
 const app = createApp(App)
+app.use(router)
 app.use(ElementPlus, { locale: zhCn })
 
-// 注册所有图标
-for (const [key, component] of Object.entries(ElementPlusIconsVue)) {
+Object.entries(ElementPlusIconsVue).forEach(([key, component]) => {
   app.component(key, component)
-}
+})
 
 app.mount('#app')
