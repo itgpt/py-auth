@@ -15,6 +15,45 @@ import logging
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/admin", tags=["管理"])
 
+DEFAULT_CONFIGS = {
+    "default_authorization": True,
+    "enable_auto_refresh": True,
+    "auto_refresh_interval_seconds": 30,
+    "device_page_size": 50
+}
+
+
+def _normalize_config_value(key: str, value):
+    """规范化配置值，确保关键配置类型稳定。"""
+    if key in ("default_authorization", "enable_auto_refresh"):
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() in ("1", "true", "yes", "on")
+        return bool(value)
+
+    if key in ("auto_refresh_interval_seconds", "device_page_size"):
+        try:
+            number = int(value)
+        except (TypeError, ValueError):
+            number = DEFAULT_CONFIGS[key]
+
+        if key == "auto_refresh_interval_seconds":
+            return max(10, min(300, number))
+        return max(20, min(200, number))
+
+    return value
+
+
+def _merged_configs(db: Session) -> dict:
+    db_configs = {c.key: c.value for c in db.query(Config).all()}
+    merged = DEFAULT_CONFIGS.copy()
+    merged.update(db_configs)
+    for key in ("default_authorization", "enable_auto_refresh", "auto_refresh_interval_seconds", "device_page_size"):
+        merged[key] = _normalize_config_value(key, merged.get(key))
+    return merged
+
+
 def get_device_or_404(device_id: str, db: Session) -> Device:
     device = db.query(Device).filter(Device.device_id == device_id).first()
     if not device:
@@ -92,8 +131,7 @@ async def get_configs(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    configs = db.query(Config).all()
-    return {c.key: c.value for c in configs}
+    return _merged_configs(db)
 
 @router.put("/config")
 async def update_configs(
@@ -101,7 +139,11 @@ async def update_configs(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    normalized = {}
     for key, value in config_update.configs.items():
+        normalized[key] = _normalize_config_value(key, value)
+
+    for key, value in normalized.items():
         config = db.query(Config).filter(Config.key == key).first()
         if config:
             config.value = value
@@ -191,4 +233,3 @@ async def delete_user(
     db.delete(db_user)
     db.commit()
     return {"message": "用户已删除"}
-

@@ -12,6 +12,16 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/auth", tags=["授权"])
 
 
+def _to_bool(value, default: bool = True) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    return bool(value)
+
+
 def _decrypt_request_or_raise(encrypted_data: str) -> dict:
     """解密请求数据，失败则抛出异常"""
     data = decrypt_request_data(encrypted_data)
@@ -44,7 +54,7 @@ def _process_device(request: DeviceAuthRequest, db: Session) -> Device:
         default_auth_config = db.query(Config).filter(Config.key == "default_authorization").first()
         is_authorized = True
         if default_auth_config is not None:
-            is_authorized = bool(default_auth_config.value)
+            is_authorized = _to_bool(default_auth_config.value, default=True)
 
         # 设备不存在：创建新设备
         device = Device(

@@ -73,7 +73,7 @@
           <el-table-column prop="last_check" label="最后检查" width="160">
             <template #default="{ row }">{{ formatDate(row.last_check) }}</template>
           </el-table-column>
-          <el-table-column label="操作" width="180" fixed="right" align="center">
+          <el-table-column label="操作" width="220" fixed="right" align="center">
             <template #default="{ row }">
               <div class="op-btns">
                 <el-button v-if="row.is_authorized" type="warning" size="small" @click="toggleAuth(row, false)" :loading="row._updating">取消授权</el-button>
@@ -140,7 +140,7 @@
           <el-pagination
             v-model:current-page="currentPage"
             v-model:page-size="pageSize"
-            :page-sizes="[50, 80, 100]"
+            :page-sizes="pageSizeOptions"
             :total="total"
             layout="total, sizes, prev, pager, next"
             @size-change="loadDevices"
@@ -159,32 +159,13 @@
         <el-empty v-else description="暂无信息" />
       </el-dialog>
 
-      <!-- 修改密码弹窗 -->
-      <el-dialog v-model="showChangePasswordDialog" title="修改密码" width="90%" style="max-width: 400px;" @close="resetPasswordForm">
-        <el-form ref="passwordFormRef" :model="passwordForm" :rules="passwordRules" label-width="80px">
-          <el-form-item label="旧密码" prop="oldPassword">
-            <el-input v-model="passwordForm.oldPassword" type="password" show-password />
-          </el-form-item>
-          <el-form-item label="新密码" prop="newPassword">
-            <el-input v-model="passwordForm.newPassword" type="password" show-password />
-          </el-form-item>
-          <el-form-item label="确认密码" prop="confirmPassword">
-            <el-input v-model="passwordForm.confirmPassword" type="password" show-password @keyup.enter="handleChangePassword" />
-          </el-form-item>
-        </el-form>
-        <template #footer>
-          <el-button @click="showChangePasswordDialog = false">取消</el-button>
-          <el-button type="primary" @click="handleChangePassword" :loading="changingPassword">确认</el-button>
-        </template>
-      </el-dialog>
-
     </div>
   </div>
 </template>
 
 <script setup>
 import { ref, onMounted, onUnmounted, computed } from 'vue'
-import { Lock, Refresh, Box, CircleCheck, CircleClose, Key, Setting } from '@element-plus/icons-vue'
+import { Refresh, Box, CircleCheck, CircleClose } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { api } from '../api'
 import { useRouter } from 'vue-router'
@@ -194,17 +175,41 @@ const devices = ref([])
 const loading = ref(false)
 const deviceInfoVisible = ref(false)
 const selectedDevice = ref(null)
-const showChangePasswordDialog = ref(false)
-const changingPassword = ref(false)
-const passwordFormRef = ref(null)
-const passwordForm = ref({ oldPassword: '', newPassword: '', confirmPassword: '' })
 const currentPage = ref(1)
 const pageSize = ref(50)
 const total = ref(0)
+const autoRefreshEnabled = ref(true)
+const autoRefreshIntervalSeconds = ref(30)
 let refreshTimer = null
 
 const authorizedCount = computed(() => devices.value.filter(d => d.is_authorized).length)
 const unauthorizedCount = computed(() => devices.value.filter(d => !d.is_authorized).length)
+const pageSizeOptions = computed(() => {
+  const values = [50, 80, 100, pageSize.value]
+    .map(v => Number(v))
+    .filter(v => Number.isFinite(v) && v >= 20 && v <= 200)
+  return Array.from(new Set(values)).sort((a, b) => a - b)
+})
+
+const loadViewConfigs = async () => {
+  try {
+    const data = await api.getConfigs()
+    if (!data || typeof data !== 'object') return
+    autoRefreshEnabled.value = data.enable_auto_refresh !== false
+
+    const interval = Number(data.auto_refresh_interval_seconds)
+    if (Number.isFinite(interval)) {
+      autoRefreshIntervalSeconds.value = Math.min(300, Math.max(10, Math.round(interval)))
+    }
+
+    const size = Number(data.device_page_size)
+    if (Number.isFinite(size)) {
+      pageSize.value = Math.min(200, Math.max(20, Math.round(size)))
+    }
+  } catch {
+    // 配置加载失败时回退到默认值，不阻塞页面功能
+  }
+}
 
 const loadDevices = async () => {
   loading.value = true
@@ -303,49 +308,16 @@ const deleteDevice = async (device) => {
   }
 }
 
-const passwordRules = {
-  oldPassword: [{ required: true, message: '请输入旧密码', trigger: 'blur' }],
-  newPassword: [{ required: true, message: '请输入新密码', trigger: 'blur' }, { min: 6, message: '至少6位', trigger: 'blur' }],
-  confirmPassword: [{ required: true, message: '请确认密码', trigger: 'blur' }, {
-    validator: (_, value, callback) => {
-      if (value !== passwordForm.value.newPassword) callback(new Error('密码不一致'))
-      else callback()
-    }, trigger: 'blur'
-  }]
-}
-
-const resetPasswordForm = () => {
-  passwordForm.value = { oldPassword: '', newPassword: '', confirmPassword: '' }
-  passwordFormRef.value?.clearValidate()
-}
-
-const handleChangePassword = async () => {
-  if (!passwordFormRef.value) return
-  try {
-    await passwordFormRef.value.validate()
-    if (passwordForm.value.oldPassword === passwordForm.value.newPassword) {
-      ElMessage.warning('新密码不能与旧密码相同')
-      return
-    }
-    changingPassword.value = true
-    await api.changePassword(passwordForm.value.oldPassword, passwordForm.value.newPassword)
-    ElMessage.success('密码修改成功')
-    showChangePasswordDialog.value = false
-    resetPasswordForm()
-  } catch (e) {
-    if (e.message?.includes('登录已过期')) {
-      api.logout()
-      router.push('/login')
-    }
-    else if (e.message) ElMessage.error(e.message)
-  } finally {
-    changingPassword.value = false
-  }
-}
-
 onMounted(() => {
-  loadDevices()
-  refreshTimer = setInterval(() => { if (!loading.value) loadDevices() }, 30000)
+  ;(async () => {
+    await loadViewConfigs()
+    await loadDevices()
+    if (autoRefreshEnabled.value) {
+      refreshTimer = setInterval(() => {
+        if (!loading.value) loadDevices()
+      }, autoRefreshIntervalSeconds.value * 1000)
+    }
+  })()
 })
 
 onUnmounted(() => {
@@ -451,10 +423,11 @@ onUnmounted(() => {
 .op-btns {
   display: flex;
   gap: 4px;
+  flex-wrap: wrap;
 }
 
 .op-btns .el-button {
-  flex: 1;
+  flex: 1 1 calc(50% - 2px);
   padding: 5px 0;
 }
 
@@ -562,7 +535,7 @@ onUnmounted(() => {
   }
   
   .stats {
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(2, 1fr);
   }
   
   .stat-card {
@@ -583,23 +556,12 @@ onUnmounted(() => {
 }
 
 @media (max-width: 480px) {
-  .header {
-    padding: 10px 12px;
-  }
-  
-  .header-title h1 {
-    font-size: 16px;
-  }
-  
-  .user-info {
-    display: none;
-  }
-  
   .content {
     padding: 12px;
   }
   
   .stats {
+    grid-template-columns: 1fr;
     gap: 8px;
   }
   
@@ -618,6 +580,14 @@ onUnmounted(() => {
   
   .stat-label {
     font-size: 11px;
+  }
+
+  .card-footer {
+    flex-wrap: wrap;
+  }
+
+  .card-footer .el-button {
+    flex: 1 1 calc(50% - 4px);
   }
 }
 </style>

@@ -1,69 +1,80 @@
 <template>
-  <div class="card">
-    <div class="card-header">
-      <h2>用户管理</h2>
-      <el-button type="primary" @click="openCreateDialog">
-        <el-icon><Plus /></el-icon>
-        <span>新建用户</span>
-      </el-button>
-    </div>
+  <div class="page-container">
+    <main class="page-content">
+      <div class="card">
+        <div class="card-header">
+          <div class="header-meta">
+            <h2>用户列表</h2>
+            <p>管理后台账户与权限状态</p>
+          </div>
+          <div class="header-actions">
+            <el-button type="primary" @click="openCreateDialog">
+              <el-icon><Plus /></el-icon>
+              <span>新建用户</span>
+            </el-button>
+          </div>
+        </div>
 
-    <el-table :data="users" v-loading="loading">
-      <el-table-column prop="username" label="用户名"></el-table-column>
-      <el-table-column prop="is_admin" label="管理员" width="100" align="center">
-        <template #default="{ row }">
-          <el-tag :type="row.is_admin ? 'success' : 'info'">{{ row.is_admin ? '是' : '否' }}</el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column prop="is_active" label="状态" width="100" align="center">
-        <template #default="{ row }">
-          <el-tag :type="row.is_active ? 'success' : 'danger'">{{ row.is_active ? '已激活' : '已禁用' }}</el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column prop="created_at" label="创建时间">
-         <template #default="{ row }">
-          {{ new Date(row.created_at).toLocaleString() }}
-        </template>
-      </el-table-column>
-      <el-table-column label="操作" width="150" align="center">
-        <template #default="{ row }">
-          <el-button link type="primary" size="small" @click="openEditDialog(row)">编辑</el-button>
-          <el-popconfirm
-            title="确定要删除此用户吗？"
-            confirm-button-text="确定"
-            cancel-button-text="取消"
-            @confirm="handleDelete(row.id)"
-            :disabled="isCurrentUser(row)"
-          >
-            <template #reference>
-              <el-button link type="danger" size="small" :disabled="isCurrentUser(row)">删除</el-button>
+        <div class="table-wrap">
+          <el-table :data="users" v-loading="loading">
+          <el-table-column prop="username" label="用户名"></el-table-column>
+          <el-table-column prop="is_admin" label="管理员" width="100" align="center">
+            <template #default="{ row }">
+              <el-tag :type="row.is_admin ? 'success' : 'info'">{{ row.is_admin ? '是' : '否' }}</el-tag>
             </template>
-          </el-popconfirm>
-        </template>
-      </el-table-column>
-    </el-table>
+          </el-table-column>
+          <el-table-column prop="is_active" label="状态" width="100" align="center">
+            <template #default="{ row }">
+              <el-tag :type="row.is_active ? 'success' : 'danger'">{{ row.is_active ? '已激活' : '已禁用' }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="created_at" label="创建时间">
+            <template #default="{ row }">
+              {{ new Date(row.created_at).toLocaleString() }}
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="150" align="center">
+            <template #default="{ row }">
+              <el-button link type="primary" size="small" @click="openEditDialog(row)">编辑</el-button>
+              <el-popconfirm
+                title="确定要删除此用户吗？"
+                confirm-button-text="确定"
+                cancel-button-text="取消"
+                @confirm="handleDelete(row.id)"
+                :disabled="isCurrentUser(row)"
+              >
+                <template #reference>
+                  <el-button link type="danger" size="small" :disabled="isCurrentUser(row)">删除</el-button>
+                </template>
+              </el-popconfirm>
+            </template>
+          </el-table-column>
+          </el-table>
+        </div>
 
-    <!-- 新建/编辑用户对话框 -->
-    <el-dialog v-model="dialogVisible" :title="dialogTitle" width="90%" style="max-width: 450px;" @close="resetForm">
-      <el-form :model="form" :rules="rules" ref="formRef" label-width="80px">
-        <el-form-item label="用户名" prop="username">
-          <el-input v-model="form.username" :disabled="isEditMode"></el-input>
-        </el-form-item>
-        <el-form-item label="密码" :prop="isEditMode ? 'password_optional' : 'password'">
-          <el-input v-model="form.password" type="password" :placeholder="isEditMode ? '留空则不修改' : ''"></el-input>
-        </el-form-item>
-        <el-form-item label="管理员" prop="is_admin">
-          <el-switch v-model="form.is_admin"></el-switch>
-        </el-form-item>
-        <el-form-item label="激活状态" prop="is_active">
-          <el-switch v-model="form.is_active"></el-switch>
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="handleSubmit">确定</el-button>
-      </template>
-    </el-dialog>
+        <!-- 新建/编辑用户对话框 -->
+        <el-dialog v-model="dialogVisible" :title="dialogTitle" width="90%" style="max-width: 450px;" @close="resetForm">
+          <el-form :model="form" :rules="rules" ref="formRef" label-width="80px">
+            <el-form-item label="用户名" prop="username">
+              <el-input v-model="form.username" :disabled="isEditMode"></el-input>
+            </el-form-item>
+            <el-form-item label="密码" :prop="isEditMode ? 'password_optional' : 'password'">
+              <el-input v-model="form.password" type="password" :placeholder="isEditMode ? '留空则不修改' : ''"></el-input>
+            </el-form-item>
+            <el-form-item label="管理员" prop="is_admin">
+              <el-switch v-model="form.is_admin"></el-switch>
+            </el-form-item>
+            <el-form-item label="激活状态" prop="is_active">
+              <el-switch v-model="form.is_active"></el-switch>
+            </el-form-item>
+          </el-form>
+          <template #footer>
+            <el-button @click="dialogVisible = false">取消</el-button>
+            <el-button type="primary" @click="handleSubmit">确定</el-button>
+          </template>
+        </el-dialog>
+      </div>
+    </main>
   </div>
 </template>
 
@@ -89,7 +100,7 @@ const form = ref({
 const rules = {
   username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
   password: [{ required: true, message: '请输入密码', trigger: 'blur' }],
-  password_optional: [] // for edit
+  password_optional: []
 }
 
 const isEditMode = computed(() => !!form.value.id)
@@ -98,7 +109,6 @@ const dialogTitle = computed(() => isEditMode.value ? '编辑用户' : '新建�
 const fetchUsers = async () => {
   loading.value = true
   try {
-    // 同时获取当前登录用户的信息
     const [usersData, meData] = await Promise.all([api.getUsers(), api.getMe()])
     users.value = usersData
     currentUser.value = meData
@@ -109,7 +119,6 @@ const fetchUsers = async () => {
   }
 }
 
-// 检查是否是当前登录的用户，防止自己删除自己
 const isCurrentUser = (user) => {
   return currentUser.value && currentUser.value.id === user.id
 }
@@ -180,17 +189,44 @@ onMounted(fetchUsers)
 </script>
 
 <style scoped>
-.card-header {
+.header-meta h2 {
+  margin: 0;
+  font-size: 16px;
+  color: var(--color-text-primary);
+}
+
+.header-meta p {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--color-text-tertiary);
+}
+
+.header-actions {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 20px;
+  justify-content: flex-end;
 }
-.card-header h2 {
-    margin: 0;
+
+.table-wrap {
+  overflow-x: auto;
 }
+
 .el-button--link {
-    padding-left: 6px;
-    padding-right: 6px;
+  padding-left: 6px;
+  padding-right: 6px;
+}
+
+@media (max-width: 768px) {
+  .card-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .header-actions {
+    width: 100%;
+  }
+
+  .header-actions .el-button {
+    width: 100%;
+  }
 }
 </style>

@@ -27,9 +27,7 @@
     
     <el-container>
       <el-header class="header">
-        <div class="header-left">
-          <span class="page-title">{{ pageTitle }}</span>
-        </div>
+        <div class="header-left">{{ pageTitle }}</div>
         <div class="header-right">
           <div class="user-info">
             <el-avatar :size="32">{{ username.charAt(0).toUpperCase() }}</el-avatar>
@@ -184,13 +182,12 @@ const handleLogout = () => {
   background: white;
   border-bottom: 1px solid #f0f0f0;
   display: flex;
-  justify-content: flex-start;
+  justify-content: space-between;
   align-items: center;
   padding: 0 24px;
-  gap: 24px;
 }
 
-.page-title {
+.header-left {
   font-size: 18px;
   font-weight: 600;
   color: #303133;

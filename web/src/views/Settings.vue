@@ -1,25 +1,29 @@
 <template>
-  <div class="settings-page">
-    <header class="header">
-      <div class="header-left">
-        <div class="header-icon">
-          <el-icon :size="20"><Setting /></el-icon>
+  <div class="page-container">
+    <main class="page-content page-content-narrow">
+      <div class="card">
+        <div class="config-header">
+          <h2>系统配置</h2>
+          <p>调整授权系统的全局行为</p>
         </div>
-        <div class="header-title">
-          <h1>系统配置</h1>
-          <p>管理系统全局设置</p>
-        </div>
-      </div>
-    </header>
 
-    <main class="content">
-      <div class="config-card">
         <el-form label-width="180px" label-position="left" v-if="!loading" @submit.prevent="save">
-          <el-form-item label="新设备默认授权">
-            <el-switch v-model="configs.default_authorization" />
-            <p class="form-item-help">开启后，新设备首次请求会自动授权。</p>
+          <el-form-item v-for="field in configFields" :key="field.key" :label="field.label">
+            <el-switch
+              v-if="field.type === 'switch'"
+              v-model="configs[field.key]"
+            />
+            <el-input-number
+              v-else-if="field.type === 'number'"
+              v-model="configs[field.key]"
+              :min="field.min"
+              :max="field.max"
+              :step="field.step || 1"
+              controls-position="right"
+            />
+            <p class="form-item-help">{{ field.help }}</p>
           </el-form-item>
-          
+
           <el-form-item>
             <el-button type="primary" @click="save" :loading="saving">保存配置</el-button>
           </el-form-item>
@@ -37,20 +41,56 @@
 import { ref, onMounted } from 'vue'
 import { api } from '../api'
 import { ElMessage } from 'element-plus'
-import { Refresh, Setting } from '@element-plus/icons-vue'
+import { Refresh } from '@element-plus/icons-vue'
+
+const configFields = [
+  {
+    key: 'default_authorization',
+    label: '新设备默认授权',
+    type: 'switch',
+    help: '开启后，新设备首次请求会自动授权。'
+  },
+  {
+    key: 'enable_auto_refresh',
+    label: '设备页自动刷新',
+    type: 'switch',
+    help: '关闭后，设备列表只在手动点击刷新时更新。'
+  },
+  {
+    key: 'auto_refresh_interval_seconds',
+    label: '自动刷新间隔(秒)',
+    type: 'number',
+    min: 10,
+    max: 300,
+    help: '设备页自动刷新间隔，建议 20-60 秒。'
+  },
+  {
+    key: 'device_page_size',
+    label: '设备页默认每页数量',
+    type: 'number',
+    min: 20,
+    max: 200,
+    help: '设备管理页面首次加载时的默认分页大小。'
+  }
+]
+
+const defaultConfigs = {
+  default_authorization: true,
+  enable_auto_refresh: true,
+  auto_refresh_interval_seconds: 30,
+  device_page_size: 50
+}
 
 const loading = ref(false)
 const saving = ref(false)
-const configs = ref({
-  default_authorization: true
-})
+const configs = ref({ ...defaultConfigs })
 
 const loadConfigs = async () => {
   loading.value = true
   try {
     const data = await api.getConfigs()
-    if (data && Object.keys(data).length > 0) {
-      configs.value = { ...configs.value, ...data }
+    if (data && typeof data === 'object') {
+      configs.value = { ...defaultConfigs, ...data }
     }
   } catch (e) {
     ElMessage.error(e.message || '加载配置失败')
@@ -62,7 +102,11 @@ const loadConfigs = async () => {
 const save = async () => {
   saving.value = true
   try {
-    await api.updateConfigs(configs.value)
+    const payload = {}
+    for (const field of configFields) {
+      payload[field.key] = configs.value[field.key]
+    }
+    await api.updateConfigs(payload)
     ElMessage.success('配置已保存')
   } catch (e) {
     ElMessage.error(e.message || '保存失败')
@@ -77,59 +121,20 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.settings-page {
-  min-height: 100vh;
-  background: #f5f7fa;
+.config-header {
+  margin-bottom: 16px;
 }
 
-.header {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  color: white;
-  padding: 12px 20px;
-  display: flex;
-  justify-content: flex-start;
-  align-items: center;
-}
-
-.header-left {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.header-icon {
-  width: 36px;
-  height: 36px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(255,255,255,0.2);
-  border-radius: 8px;
-}
-
-.header-title h1 {
-  font-size: 18px;
-  font-weight: 600;
+.config-header h2 {
   margin: 0;
+  font-size: 16px;
+  color: var(--color-text-primary);
 }
 
-.header-title p {
+.config-header p {
+  margin: 2px 0 0;
   font-size: 12px;
-  opacity: 0.8;
-  margin: 0;
-}
-
-.content {
-  padding: 16px;
-  max-width: 800px;
-  margin: 0 auto;
-}
-
-.config-card {
-  background: white;
-  border-radius: 10px;
-  padding: 24px;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+  color: var(--color-text-tertiary);
 }
 
 .form-item-help {
@@ -147,5 +152,11 @@ onMounted(() => {
   justify-content: center;
   align-items: center;
   gap: 8px;
+}
+
+@media (max-width: 768px) {
+  :deep(.el-form-item__label) {
+    width: 120px !important;
+  }
 }
 </style>
