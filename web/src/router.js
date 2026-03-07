@@ -2,6 +2,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 import AdminPanel from './components/AdminPanel.vue'
 import Settings from './views/Settings.vue'
 import Users from './views/Users.vue'
+import AuditLogs from './views/AuditLogs.vue'
 import LoginForm from './components/LoginForm.vue'
 import AdminLayout from './views/AdminLayout.vue'
 
@@ -30,6 +31,11 @@ const routes = [
         path: 'users',
         name: 'Users',
         component: Users,
+      },
+      {
+        path: 'logs',
+        name: 'AuditLogs',
+        component: AuditLogs,
       }
     ]
   }

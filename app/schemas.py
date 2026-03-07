@@ -76,3 +76,21 @@ class ChangePasswordRequest(BaseModel):
 
 class ConfigUpdate(BaseModel):
     configs: Dict[str, Any]
+
+
+class OperationLogResponse(BaseModel):
+    id: int
+    username: str
+    action: str
+    target_type: str
+    target_id: Optional[str]
+    detail: Optional[Dict[str, Any]]
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class OperationLogListResponse(BaseModel):
+    total: int
+    logs: list[OperationLogResponse]

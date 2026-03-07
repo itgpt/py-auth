@@ -104,6 +104,10 @@ class ApiService {
     })
   }
 
+  async getOperationLogs(page = 1, pageSize = 50) {
+    return this.request(`/admin/logs?page=${page}&page_size=${pageSize}`)
+  }
+
   // 用户管理
   async getUsers() {
     return this.request('/admin/users')

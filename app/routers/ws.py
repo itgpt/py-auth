@@ -5,7 +5,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.auth import get_user_by_username, verify_token
 from app.database import SessionLocal
-from app.models import Device
+from app.models import Device, OperationLog
 from app.schemas import DeviceResponse
 from app.ws_manager import device_ws_manager
 
@@ -29,6 +29,23 @@ def _is_valid_token(token: str) -> bool:
         db.close()
 
 
+def _get_username_from_token(token: str) -> str | None:
+    payload = verify_token(token)
+    if not payload:
+        return None
+    username = payload.get("sub")
+    if not username:
+        return None
+    db = SessionLocal()
+    try:
+        user = get_user_by_username(db, username)
+        if not user or not user.is_active:
+            return None
+        return user.username
+    finally:
+        db.close()
+
+
 def _load_devices_payload(page: int, page_size: int) -> dict:
     page = max(1, int(page))
     page_size = max(1, min(200, int(page_size)))
@@ -48,12 +65,13 @@ def _load_devices_payload(page: int, page_size: int) -> dict:
         db.close()
 
 
-def _update_device_payload(device_id: str, update_data: dict) -> dict:
+def _update_device_payload(device_id: str, update_data: dict, actor: str) -> dict:
     db = SessionLocal()
     try:
         device = db.query(Device).filter(Device.device_id == device_id).first()
         if not device:
             raise ValueError("设备不存在")
+        original_created_at = device.created_at
 
         if "remark" in update_data:
             device.remark = update_data.get("remark")
@@ -61,6 +79,15 @@ def _update_device_payload(device_id: str, update_data: dict) -> dict:
             device.is_authorized = bool(update_data.get("is_authorized"))
 
         device.updated_at = datetime.now()
+        # created_at 由后端创建时写入，后续更新强制保持不变
+        device.created_at = original_created_at
+        db.add(OperationLog(
+            username=actor,
+            action="update_device",
+            target_type="device",
+            target_id=device.device_id,
+            detail=update_data
+        ))
         db.commit()
         db.refresh(device)
         return {"device": DeviceResponse.model_validate(device).model_dump(mode="json")}
@@ -68,12 +95,19 @@ def _update_device_payload(device_id: str, update_data: dict) -> dict:
         db.close()
 
 
-def _delete_device_payload(device_id: str) -> dict:
+def _delete_device_payload(device_id: str, actor: str) -> dict:
     db = SessionLocal()
     try:
         deleted_count = db.query(Device).filter(Device.device_id == device_id).delete()
         if deleted_count == 0:
             raise ValueError("设备不存在")
+        db.add(OperationLog(
+            username=actor,
+            action="delete_device",
+            target_type="device",
+            target_id=device_id,
+            detail=None
+        ))
         db.commit()
         return {"device_id": device_id}
     finally:
@@ -86,6 +120,7 @@ async def device_events(websocket: WebSocket):
     if not token or not _is_valid_token(token):
         await websocket.close(code=4401, reason="unauthorized")
         return
+    actor = _get_username_from_token(token) or "unknown"
 
     await device_ws_manager.connect(websocket)
     await websocket.send_json({"type": "connected"})
@@ -127,7 +162,7 @@ async def device_events(websocket: WebSocket):
                     if not allowed:
                         raise ValueError("缺少可更新字段")
 
-                    payload = _update_device_payload(device_id, allowed)
+                    payload = _update_device_payload(device_id, allowed, actor)
                     payload.update({"type": "device_updated", "request_id": request_id})
                     await websocket.send_json(payload)
                     await device_ws_manager.broadcast({
@@ -149,7 +184,7 @@ async def device_events(websocket: WebSocket):
                     device_id = str(data.get("device_id", "")).strip()
                     if not device_id:
                         raise ValueError("缺少 device_id")
-                    payload = _delete_device_payload(device_id)
+                    payload = _delete_device_payload(device_id, actor)
                     payload.update({"type": "device_deleted", "request_id": request_id})
                     await websocket.send_json(payload)
                     await device_ws_manager.broadcast({

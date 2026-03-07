@@ -1,10 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.database import get_db
-from app.models import User, Config
+from app.models import User, Config, OperationLog
 from app.schemas import (
     ConfigUpdate,
-    UserResponse, UserCreate, UserUpdate
+    UserResponse, UserCreate, UserUpdate, OperationLogResponse, OperationLogListResponse
 )
 from app.auth import get_current_user, get_password_hash
 import logging
@@ -39,6 +39,23 @@ def _merged_configs(db: Session) -> dict:
         merged[key] = _normalize_config_value(key, merged.get(key))
     return merged
 
+
+def _add_operation_log(
+    db: Session,
+    username: str,
+    action: str,
+    target_type: str,
+    target_id: str | None = None,
+    detail: dict | None = None
+):
+    db.add(OperationLog(
+        username=username,
+        action=action,
+        target_type=target_type,
+        target_id=target_id,
+        detail=detail
+    ))
+
 @router.get("/config")
 async def get_configs(
     db: Session = Depends(get_db),
@@ -66,6 +83,15 @@ async def update_configs(
         else:
             new_config = Config(key=key, value=value)
             db.add(new_config)
+
+    _add_operation_log(
+        db,
+        username=current_user.username,
+        action="update_config",
+        target_type="config",
+        target_id=None,
+        detail={"configs": normalized}
+    )
     
     try:
         db.commit()
@@ -89,6 +115,31 @@ async def get_users(
     check_admin(current_user)
     return db.query(User).all()
 
+
+@router.get("/logs", response_model=OperationLogListResponse)
+async def get_operation_logs(
+    page: int = 1,
+    page_size: int = 50,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    check_admin(current_user)
+    page = max(1, int(page))
+    page_size = max(1, min(200, int(page_size)))
+    query = db.query(OperationLog)
+    total = query.count()
+    logs = (
+        query
+        .order_by(OperationLog.created_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+    return {
+        "total": total,
+        "logs": [OperationLogResponse.model_validate(item) for item in logs]
+    }
+
 @router.post("/users", response_model=UserResponse)
 async def create_user(
     user_data: UserCreate,
@@ -106,6 +157,14 @@ async def create_user(
         is_active=user_data.is_active
     )
     db.add(new_user)
+    _add_operation_log(
+        db,
+        username=current_user.username,
+        action="create_user",
+        target_type="user",
+        target_id=user_data.username,
+        detail={"is_admin": user_data.is_admin, "is_active": user_data.is_active}
+    )
     db.commit()
     db.refresh(new_user)
     return new_user
@@ -127,7 +186,17 @@ async def update_user(
     
     for key, value in user_data.model_dump(exclude_unset=True, exclude={'password'}).items():
         setattr(db_user, key, value)
-    
+    _add_operation_log(
+        db,
+        username=current_user.username,
+        action="update_user",
+        target_type="user",
+        target_id=db_user.username,
+        detail={
+            "updated_fields": list(user_data.model_dump(exclude_unset=True).keys()),
+            "user_id": user_id
+        }
+    )
     db.commit()
     db.refresh(db_user)
     return db_user
@@ -146,6 +215,15 @@ async def delete_user(
     if not db_user:
         raise HTTPException(status_code=404, detail="用户不存在")
     
+    username = db_user.username
     db.delete(db_user)
+    _add_operation_log(
+        db,
+        username=current_user.username,
+        action="delete_user",
+        target_type="user",
+        target_id=username,
+        detail={"user_id": user_id}
+    )
     db.commit()
     return {"message": "用户已删除"}

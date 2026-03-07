@@ -43,3 +43,20 @@ class Config(Base):
     def __repr__(self):
         return f"<Config(key={self.key}, value={self.value})>"
 
+
+class OperationLog(Base):
+    __tablename__ = "operation_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String(50), nullable=False, index=True)
+    action = Column(String(100), nullable=False, index=True)
+    target_type = Column(String(50), nullable=False, index=True)
+    target_id = Column(String(255), nullable=True, index=True)
+    detail = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=datetime.now, index=True)
+
+    def __repr__(self):
+        return (
+            f"<OperationLog(id={self.id}, username={self.username}, "
+            f"action={self.action}, target_type={self.target_type}, target_id={self.target_id})>"
+        )

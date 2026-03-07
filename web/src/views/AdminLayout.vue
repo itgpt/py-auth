@@ -22,6 +22,10 @@
           <el-icon><Setting /></el-icon>
           <span>系统配置</span>
         </el-menu-item>
+        <el-menu-item index="/logs">
+          <el-icon><Document /></el-icon>
+          <span>审计日志</span>
+        </el-menu-item>
       </el-menu>
     </el-aside>
     
@@ -76,7 +80,7 @@
 <script setup>
 import { ref, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Lock, Box, User, Setting, ArrowDown } from '@element-plus/icons-vue'
+import { Lock, Box, User, Setting, Document, ArrowDown } from '@element-plus/icons-vue'
 import { api } from '../api'
 import { ElMessage } from 'element-plus'
 
@@ -89,7 +93,8 @@ const pageTitle = computed(() => {
   const titles = {
     '/': '设备管理',
     '/users': '用户管理',
-    '/settings': '系统配置'
+    '/settings': '系统配置',
+    '/logs': '审计日志'
   }
   return titles[route.path] || ''
 })
