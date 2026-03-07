@@ -40,16 +40,18 @@ const router = createRouter({
   routes
 })
 
-router.beforeEach((to, from, next) => {
+router.beforeEach((to) => {
   const isLoggedIn = !!localStorage.getItem('authToken')
 
   if (to.matched.some(record => record.meta.requiresAuth) && !isLoggedIn) {
-    next({ name: 'Login' })
-  } else if (to.name === 'Login' && isLoggedIn) {
-    next({ name: 'Dashboard' })
-  } else {
-    next()
+    return { name: 'Login' }
   }
+
+  if (to.name === 'Login' && isLoggedIn) {
+    return { name: 'Dashboard' }
+  }
+
+  return true
 })
 
 export default router

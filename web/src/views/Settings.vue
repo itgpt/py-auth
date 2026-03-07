@@ -49,36 +49,11 @@ const configFields = [
     label: '新设备默认授权',
     type: 'switch',
     help: '开启后，新设备首次请求会自动授权。'
-  },
-  {
-    key: 'enable_auto_refresh',
-    label: '设备页自动刷新',
-    type: 'switch',
-    help: '关闭后，设备列表只在手动点击刷新时更新。'
-  },
-  {
-    key: 'auto_refresh_interval_seconds',
-    label: '自动刷新间隔(秒)',
-    type: 'number',
-    min: 10,
-    max: 300,
-    help: '设备页自动刷新间隔，建议 20-60 秒。'
-  },
-  {
-    key: 'device_page_size',
-    label: '设备页默认每页数量',
-    type: 'number',
-    min: 20,
-    max: 200,
-    help: '设备管理页面首次加载时的默认分页大小。'
   }
 ]
 
 const defaultConfigs = {
-  default_authorization: true,
-  enable_auto_refresh: true,
-  auto_refresh_interval_seconds: 30,
-  device_page_size: 50
+  default_authorization: true
 }
 
 const loading = ref(false)

@@ -5,6 +5,7 @@ from fastapi.responses import FileResponse
 from dotenv import load_dotenv
 from app.database import engine, Base, SessionLocal
 from app.routers import auth, admin
+from app.routers import ws as ws_router
 from app.routers import user as user_router
 from app.auth import init_admin_user
 from app.middleware import setup_cors
@@ -67,6 +68,7 @@ setup_cors(app)
 app.include_router(auth.router)
 app.include_router(admin.router)
 app.include_router(user_router.router)
+app.include_router(ws_router.router)
 
 # 静态文件服务
 web_dist_path = os.path.join(os.path.dirname(__file__), "web", "dist")

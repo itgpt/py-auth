@@ -6,41 +6,29 @@ from app.database import get_db
 from app.models import Device, User, Config
 from app.schemas import (
     DeviceResponse, DeviceUpdate,
-    ConfigItem, ConfigUpdate,
+    ConfigUpdate,
     UserResponse, UserCreate, UserUpdate
 )
 from app.auth import get_current_user, get_password_hash
+from app.ws_manager import device_ws_manager
 import logging
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/admin", tags=["管理"])
 
 DEFAULT_CONFIGS = {
-    "default_authorization": True,
-    "enable_auto_refresh": True,
-    "auto_refresh_interval_seconds": 30,
-    "device_page_size": 50
+    "default_authorization": True
 }
 
 
 def _normalize_config_value(key: str, value):
     """规范化配置值，确保关键配置类型稳定。"""
-    if key in ("default_authorization", "enable_auto_refresh"):
+    if key == "default_authorization":
         if isinstance(value, bool):
             return value
         if isinstance(value, str):
             return value.strip().lower() in ("1", "true", "yes", "on")
         return bool(value)
-
-    if key in ("auto_refresh_interval_seconds", "device_page_size"):
-        try:
-            number = int(value)
-        except (TypeError, ValueError):
-            number = DEFAULT_CONFIGS[key]
-
-        if key == "auto_refresh_interval_seconds":
-            return max(10, min(300, number))
-        return max(20, min(200, number))
 
     return value
 
@@ -48,8 +36,10 @@ def _normalize_config_value(key: str, value):
 def _merged_configs(db: Session) -> dict:
     db_configs = {c.key: c.value for c in db.query(Config).all()}
     merged = DEFAULT_CONFIGS.copy()
-    merged.update(db_configs)
-    for key in ("default_authorization", "enable_auto_refresh", "auto_refresh_interval_seconds", "device_page_size"):
+    for key in DEFAULT_CONFIGS.keys():
+        if key in db_configs:
+            merged[key] = db_configs[key]
+    for key in ("default_authorization",):
         merged[key] = _normalize_config_value(key, merged.get(key))
     return merged
 
@@ -99,6 +89,11 @@ async def update_device(
         db.flush()
         db.commit()
         db.refresh(device)
+        await device_ws_manager.broadcast({
+            "type": "devices_changed",
+            "action": "updated",
+            "device_id": device.device_id
+        })
         return device
     except HTTPException:
         raise
@@ -124,6 +119,11 @@ async def delete_device(
     if deleted_count == 0:
         raise HTTPException(status_code=404, detail="设备不存在")
     db.commit()
+    await device_ws_manager.broadcast({
+        "type": "devices_changed",
+        "action": "deleted",
+        "device_id": device_id
+    })
     return {"message": "已删除"}
 
 @router.get("/config")
@@ -139,8 +139,11 @@ async def update_configs(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    allowed_keys = set(DEFAULT_CONFIGS.keys())
     normalized = {}
     for key, value in config_update.configs.items():
+        if key not in allowed_keys:
+            continue
         normalized[key] = _normalize_config_value(key, value)
 
     for key, value in normalized.items():

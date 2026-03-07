@@ -93,10 +93,6 @@ class ApiService {
   }
 
   // 设备管理
-  async getDevices(page = 1, pageSize = 10) {
-    return this.request(`/admin/devices?page=${page}&page_size=${pageSize}`)
-  }
-
   async updateDevice(deviceId, data) {
     return this.request(`/admin/devices/${encodeURIComponent(deviceId)}`, {
       method: 'PUT',

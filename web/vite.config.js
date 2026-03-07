@@ -21,6 +21,17 @@ export default defineConfig({
             console.log('[Proxy]', req.method, req.url, '->', options.target + req.url)
           })
         }
+      },
+      '/ws': {
+        target: 'ws://127.0.0.1:8000',
+        ws: true,
+        changeOrigin: true,
+        secure: false,
+        configure: (proxy, options) => {
+          proxy.on('proxyReqWs', (proxyReq, req) => {
+            console.log('[WS Proxy]', req.url, '->', options.target + req.url)
+          })
+        }
       }
     }
   }

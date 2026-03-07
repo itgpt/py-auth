@@ -30,10 +30,6 @@
       <div class="device-section">
         <div class="section-header">
           <h2>设备列表</h2>
-          <el-button type="primary" size="small" @click="loadDevices" :loading="loading">
-            <el-icon><Refresh /></el-icon>
-            刷新
-          </el-button>
         </div>
 
         <!-- 桌面端表格 -->
@@ -73,7 +69,7 @@
           <el-table-column prop="last_check" label="最后检查" width="160">
             <template #default="{ row }">{{ formatDate(row.last_check) }}</template>
           </el-table-column>
-          <el-table-column label="操作" width="220" fixed="right" align="center">
+          <el-table-column label="操作" width="270" fixed="right" align="center">
             <template #default="{ row }">
               <div class="op-btns">
                 <el-button v-if="row.is_authorized" type="warning" size="small" @click="toggleAuth(row, false)" :loading="row._updating">取消授权</el-button>
@@ -140,7 +136,7 @@
           <el-pagination
             v-model:current-page="currentPage"
             v-model:page-size="pageSize"
-            :page-sizes="pageSizeOptions"
+            :page-sizes="[50, 80, 100]"
             :total="total"
             layout="total, sizes, prev, pager, next"
             @size-change="loadDevices"
@@ -178,50 +174,147 @@ const selectedDevice = ref(null)
 const currentPage = ref(1)
 const pageSize = ref(50)
 const total = ref(0)
-const autoRefreshEnabled = ref(true)
-const autoRefreshIntervalSeconds = ref(30)
-let refreshTimer = null
+let deviceSocket = null
+let reconnectTimer = null
+let reconnectEnabled = true
+let wsRequestSeq = 0
+const pendingWsRequests = new Map()
 
 const authorizedCount = computed(() => devices.value.filter(d => d.is_authorized).length)
 const unauthorizedCount = computed(() => devices.value.filter(d => !d.is_authorized).length)
-const pageSizeOptions = computed(() => {
-  const values = [50, 80, 100, pageSize.value]
-    .map(v => Number(v))
-    .filter(v => Number.isFinite(v) && v >= 20 && v <= 200)
-  return Array.from(new Set(values)).sort((a, b) => a - b)
-})
 
-const loadViewConfigs = async () => {
-  try {
-    const data = await api.getConfigs()
-    if (!data || typeof data !== 'object') return
-    autoRefreshEnabled.value = data.enable_auto_refresh !== false
+const requestDevicesReload = () => {
+  if (!loading.value) {
+    loadDevices()
+  }
+}
 
-    const interval = Number(data.auto_refresh_interval_seconds)
-    if (Number.isFinite(interval)) {
-      autoRefreshIntervalSeconds.value = Math.min(300, Math.max(10, Math.round(interval)))
+const applyDevicesPayload = (data) => {
+  total.value = Number(data?.total || 0)
+  const list = Array.isArray(data?.devices) ? data.devices : []
+  devices.value = list.map(d => ({
+    ...d,
+    _originalRemark: d.remark || '',
+    _remarkValue: d.remark || '',
+    _updating: false
+  }))
+}
+
+const rejectPendingWsRequests = (message) => {
+  for (const [, pending] of pendingWsRequests) {
+    pending.reject(new Error(message))
+  }
+  pendingWsRequests.clear()
+}
+
+const sendWsRequest = (payload) => {
+  return new Promise((resolve, reject) => {
+    if (!deviceSocket || deviceSocket.readyState !== WebSocket.OPEN) {
+      reject(new Error('实时连接未就绪'))
+      return
     }
 
-    const size = Number(data.device_page_size)
-    if (Number.isFinite(size)) {
-      pageSize.value = Math.min(200, Math.max(20, Math.round(size)))
+    wsRequestSeq += 1
+    const requestId = `r_${Date.now()}_${wsRequestSeq}`
+    pendingWsRequests.set(requestId, { resolve, reject })
+    deviceSocket.send(JSON.stringify({ ...payload, request_id: requestId }))
+
+    setTimeout(() => {
+      const pending = pendingWsRequests.get(requestId)
+      if (!pending) return
+      pendingWsRequests.delete(requestId)
+      pending.reject(new Error('实时请求超时'))
+    }, 8000)
+  })
+}
+
+const cleanupWebSocket = () => {
+  if (deviceSocket) {
+    deviceSocket.close()
+    deviceSocket = null
+  }
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer)
+    reconnectTimer = null
+  }
+}
+
+const connectWebSocket = () => {
+  if (deviceSocket) return
+
+  const token = api.getToken()
+  if (!token) return
+
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  const wsUrl = `${protocol}//${window.location.host}/ws?token=${encodeURIComponent(token)}`
+  deviceSocket = new WebSocket(wsUrl)
+
+  deviceSocket.onmessage = (event) => {
+    try {
+      const data = JSON.parse(event.data)
+      if (data?.type === 'devices_list') {
+        if (data.request_id) {
+          const pending = pendingWsRequests.get(data.request_id)
+          if (pending) {
+            pendingWsRequests.delete(data.request_id)
+            pending.resolve(data)
+          } else {
+            applyDevicesPayload(data)
+          }
+        } else {
+          applyDevicesPayload(data)
+        }
+        return
+      }
+      if (data?.type === 'devices_changed') {
+        requestDevicesReload()
+      }
+    } catch {
+      // ignore invalid websocket messages
     }
-  } catch {
-    // 配置加载失败时回退到默认值，不阻塞页面功能
+  }
+
+  deviceSocket.onclose = (event) => {
+    deviceSocket = null
+    rejectPendingWsRequests('实时连接已断开')
+    if (event.code === 4401) {
+      api.logout()
+      router.push('/login')
+      return
+    }
+
+    if (!reconnectEnabled) return
+    const delay = 3000
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null
+      connectWebSocket()
+    }, delay)
+  }
+
+  deviceSocket.onerror = () => {
+    if (deviceSocket) {
+      deviceSocket.close()
+    }
+  }
+
+  deviceSocket.onopen = () => {
+    requestDevicesReload()
   }
 }
 
 const loadDevices = async () => {
+  if (!deviceSocket || deviceSocket.readyState !== WebSocket.OPEN) {
+    connectWebSocket()
+    return
+  }
   loading.value = true
   try {
-    const data = await api.getDevices(currentPage.value, pageSize.value)
-    total.value = data.total
-    devices.value = data.devices.map(d => ({
-      ...d,
-      _originalRemark: d.remark || '',
-      _remarkValue: d.remark || '',
-      _updating: false
-    }))
+    const data = await sendWsRequest({
+      type: 'get_devices',
+      page: currentPage.value,
+      page_size: pageSize.value
+    })
+    applyDevicesPayload(data)
   } catch (e) {
     if (e.message.includes('登录已过期')) {
       api.logout()
@@ -309,19 +402,13 @@ const deleteDevice = async (device) => {
 }
 
 onMounted(() => {
-  ;(async () => {
-    await loadViewConfigs()
-    await loadDevices()
-    if (autoRefreshEnabled.value) {
-      refreshTimer = setInterval(() => {
-        if (!loading.value) loadDevices()
-      }, autoRefreshIntervalSeconds.value * 1000)
-    }
-  })()
+  connectWebSocket()
 })
 
 onUnmounted(() => {
-  if (refreshTimer) clearInterval(refreshTimer)
+  reconnectEnabled = false
+  rejectPendingWsRequests('页面已关闭')
+  cleanupWebSocket()
 })
 </script>
 
@@ -394,7 +481,7 @@ onUnmounted(() => {
 
 .section-header {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-start;
   align-items: center;
   margin-bottom: 16px;
 }
@@ -421,13 +508,14 @@ onUnmounted(() => {
 }
 
 .op-btns {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 4px;
-  flex-wrap: wrap;
 }
 
 .op-btns .el-button {
-  flex: 1 1 calc(50% - 2px);
+  width: 100%;
+  min-width: 0;
   padding: 5px 0;
 }
 

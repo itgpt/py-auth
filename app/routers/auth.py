@@ -6,6 +6,7 @@ from app.database import get_db
 from app.models import Device, Config
 from app.schemas import DeviceAuthRequest, EncryptedRequest, EncryptedResponse
 from app.auth import decrypt_request_data, encrypt_response_data
+from app.ws_manager import device_ws_manager
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +31,7 @@ def _decrypt_request_or_raise(encrypted_data: str) -> dict:
     return data
 
 
-def _process_device(request: DeviceAuthRequest, db: Session) -> Device:
+def _process_device(request: DeviceAuthRequest, db: Session) -> tuple[Device, bool]:
     """
     统一处理设备逻辑：设备存在则更新信息，不存在则创建
     
@@ -43,6 +44,8 @@ def _process_device(request: DeviceAuthRequest, db: Session) -> Device:
     """
     device = db.query(Device).filter(Device.device_id == request.device_id).first()
     
+    created = False
+
     if device:
         # 设备存在：更新设备信息
         if request.software_name is not None:
@@ -64,20 +67,28 @@ def _process_device(request: DeviceAuthRequest, db: Session) -> Device:
             is_authorized=is_authorized
         )
         db.add(device)
+        created = True
     
     # 更新最后检查时间（使用本地时间，与 created_at 和 updated_at 保持一致）
     device.last_check = datetime.now()
     db.commit()
     db.refresh(device)
     
-    return device
+    return device, created
 
 
 @router.post("/heartbeat", response_model=EncryptedResponse)
 async def heartbeat(request: EncryptedRequest, db: Session = Depends(get_db)):
     """设备心跳接口：检查授权状态、注册/更新设备（请求和响应都使用AES加密）"""
     auth_request = DeviceAuthRequest(**_decrypt_request_or_raise(request.encrypted_data))
-    device = _process_device(auth_request, db)
+    device, created = _process_device(auth_request, db)
+
+    if created:
+        await device_ws_manager.broadcast({
+            "type": "devices_changed",
+            "action": "created",
+            "device_id": device.device_id
+        })
     
     response_data = {
         "authorized": device.is_authorized,
