@@ -28,10 +28,6 @@ class DeviceResponse(BaseModel):
     class Config:
         from_attributes = True
 
-class DeviceUpdate(BaseModel):
-    remark: Optional[str] = None
-    is_authorized: Optional[bool] = None
-
 # 向后兼容：保留 AuthCheckRequest 作为别名
 AuthCheckRequest = DeviceAuthRequest
 

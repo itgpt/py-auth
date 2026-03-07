@@ -1,16 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from sqlalchemy.exc import OperationalError
-from datetime import datetime
 from app.database import get_db
-from app.models import Device, User, Config
+from app.models import User, Config
 from app.schemas import (
-    DeviceResponse, DeviceUpdate,
     ConfigUpdate,
     UserResponse, UserCreate, UserUpdate
 )
 from app.auth import get_current_user, get_password_hash
-from app.ws_manager import device_ws_manager
 import logging
 
 logger = logging.getLogger(__name__)
@@ -42,89 +38,6 @@ def _merged_configs(db: Session) -> dict:
     for key in ("default_authorization",):
         merged[key] = _normalize_config_value(key, merged.get(key))
     return merged
-
-
-def get_device_or_404(device_id: str, db: Session) -> Device:
-    device = db.query(Device).filter(Device.device_id == device_id).first()
-    if not device:
-        raise HTTPException(status_code=404, detail="设备不存在")
-    return device
-
-@router.get("/devices")
-async def get_devices(
-    page: int = 1,
-    page_size: int = 10,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    query = db.query(Device)
-    total = query.count()
-    devices = query.order_by(Device.updated_at.desc()).offset((page - 1) * page_size).limit(page_size).all()
-    return {"total": total, "devices": [DeviceResponse.model_validate(d) for d in devices]}
-
-@router.get("/devices/{device_id}", response_model=DeviceResponse)
-async def get_device(
-    device_id: str,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    return get_device_or_404(device_id, db)
-
-@router.put("/devices/{device_id}", response_model=DeviceResponse)
-async def update_device(
-    device_id: str,
-    device_update: DeviceUpdate,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    update_data = device_update.model_dump(exclude_unset=True)
-    if not update_data:
-        return get_device_or_404(device_id, db)
-    
-    try:
-        device = get_device_or_404(device_id, db)
-        for key, value in update_data.items():
-            setattr(device, key, value)
-        device.updated_at = datetime.now()
-        db.flush()
-        db.commit()
-        db.refresh(device)
-        await device_ws_manager.broadcast({
-            "type": "devices_changed",
-            "action": "updated",
-            "device_id": device.device_id
-        })
-        return device
-    except HTTPException:
-        raise
-    except OperationalError as e:
-        db.rollback()
-        logger.error(f"数据库锁定，更新设备失败: {e}")
-        device = db.query(Device).filter(Device.device_id == device_id).first()
-        if device:
-            return device
-        raise HTTPException(status_code=500, detail="操作失败，请稍后重试")
-    except Exception as e:
-        db.rollback()
-        logger.error(f"更新设备时发生错误: {e}")
-        raise HTTPException(status_code=500, detail="更新失败，请稍后重试")
-
-@router.delete("/devices/{device_id}")
-async def delete_device(
-    device_id: str,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    deleted_count = db.query(Device).filter(Device.device_id == device_id).delete()
-    if deleted_count == 0:
-        raise HTTPException(status_code=404, detail="设备不存在")
-    db.commit()
-    await device_ws_manager.broadcast({
-        "type": "devices_changed",
-        "action": "deleted",
-        "device_id": device_id
-    })
-    return {"message": "已删除"}
 
 @router.get("/config")
 async def get_configs(

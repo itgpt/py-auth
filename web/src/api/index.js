@@ -92,20 +92,6 @@ class ApiService {
     this.setToken(null)
   }
 
-  // 设备管理
-  async updateDevice(deviceId, data) {
-    return this.request(`/admin/devices/${encodeURIComponent(deviceId)}`, {
-      method: 'PUT',
-      body: JSON.stringify(data)
-    })
-  }
-
-  async deleteDevice(deviceId) {
-    return this.request(`/admin/devices/${encodeURIComponent(deviceId)}`, {
-      method: 'DELETE'
-    })
-  }
-
   // 配置管理
   async getConfigs() {
     return this.request('/admin/config')

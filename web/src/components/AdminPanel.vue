@@ -216,7 +216,7 @@ const sendWsRequest = (payload) => {
 
     wsRequestSeq += 1
     const requestId = `r_${Date.now()}_${wsRequestSeq}`
-    pendingWsRequests.set(requestId, { resolve, reject })
+    pendingWsRequests.set(requestId, { resolve, reject, requestType: payload.type })
     deviceSocket.send(JSON.stringify({ ...payload, request_id: requestId }))
 
     setTimeout(() => {
@@ -252,18 +252,24 @@ const connectWebSocket = () => {
   deviceSocket.onmessage = (event) => {
     try {
       const data = JSON.parse(event.data)
-      if (data?.type === 'devices_list') {
-        if (data.request_id) {
-          const pending = pendingWsRequests.get(data.request_id)
-          if (pending) {
-            pendingWsRequests.delete(data.request_id)
-            pending.resolve(data)
-          } else {
+      if (data?.request_id) {
+        const pending = pendingWsRequests.get(data.request_id)
+        if (pending) {
+          pendingWsRequests.delete(data.request_id)
+          if (data.type === 'error') {
+            pending.reject(new Error(data.message || '实时请求失败'))
+            return
+          }
+          pending.resolve(data)
+          if (data.type === 'devices_list') {
             applyDevicesPayload(data)
           }
-        } else {
-          applyDevicesPayload(data)
+          return
         }
+      }
+
+      if (data?.type === 'devices_list') {
+        applyDevicesPayload(data)
         return
       }
       if (data?.type === 'devices_changed') {
@@ -344,9 +350,12 @@ const showDeviceInfo = (device) => {
 const saveRemark = async (device) => {
   if (device._remarkValue === device._originalRemark) return
   try {
-    // 只传递备注字段，updated_at 由后端自动处理
-    const updatedDevice = await api.updateDevice(device.device_id, { remark: device._remarkValue })
-    // 更新本地设备对象，使用后端返回的数据（包括后端设置的 updated_at）
+    const result = await sendWsRequest({
+      type: 'update_device',
+      device_id: device.device_id,
+      data: { remark: device._remarkValue }
+    })
+    const updatedDevice = result.device
     Object.assign(device, {
       ...updatedDevice,
       _originalRemark: updatedDevice.remark || '',
@@ -364,9 +373,12 @@ const toggleAuth = async (device, authorize) => {
   if (device._updating) return
   device._updating = true
   try {
-    // 只传递授权状态字段，updated_at 由后端自动处理
-    const updatedDevice = await api.updateDevice(device.device_id, { is_authorized: authorize })
-    // 更新本地设备对象，使用后端返回的数据（包括后端设置的 updated_at）
+    const result = await sendWsRequest({
+      type: 'update_device',
+      device_id: device.device_id,
+      data: { is_authorized: authorize }
+    })
+    const updatedDevice = result.device
     Object.assign(device, {
       ...updatedDevice,
       _originalRemark: updatedDevice.remark || '',
@@ -387,7 +399,10 @@ const toggleAuth = async (device, authorize) => {
 const deleteDevice = async (device) => {
   device._updating = true
   try {
-    await api.deleteDevice(device.device_id)
+    await sendWsRequest({
+      type: 'delete_device',
+      device_id: device.device_id
+    })
     devices.value = devices.value.filter(d => d.device_id !== device.device_id)
     ElMessage.success('已删除')
   } catch (e) {
