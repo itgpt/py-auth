@@ -184,9 +184,10 @@ const handleLogout = () => {
   background: white;
   border-bottom: 1px solid #f0f0f0;
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-start;
   align-items: center;
   padding: 0 24px;
+  gap: 24px;
 }
 
 .page-title {
