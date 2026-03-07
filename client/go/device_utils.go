@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-
 	"github.com/google/uuid"
 )
 
@@ -30,16 +29,24 @@ type DeviceFacts struct {
 
 // DeviceInfo 设备信息（发送给服务器）
 type DeviceInfo struct {
-	Hostname   string `json:"hostname,omitempty"`
-	System     string `json:"system,omitempty"`
-	Release    string `json:"release,omitempty"`
-	Version    string `json:"version,omitempty"`
-	Machine    string `json:"machine,omitempty"`
-	Processor  string `json:"processor,omitempty"`
-	MACAddress string `json:"mac_address,omitempty"`
-	IPAddress  string `json:"ip_address,omitempty"`
-	CPUCount   int    `json:"cpu_count,omitempty"`
-	Username   string `json:"username,omitempty"`
+	Hostname           string  `json:"hostname,omitempty"`
+	System             string  `json:"system,omitempty"`
+	Release            string  `json:"release,omitempty"`
+	Version            string  `json:"version,omitempty"`
+	Machine            string  `json:"machine,omitempty"`
+	Processor          string  `json:"processor,omitempty"`
+	MACAddress         string  `json:"mac_address,omitempty"`
+	IPAddress          string  `json:"ip_address,omitempty"`
+	CPUCount           int     `json:"cpu_count,omitempty"`
+	CPUModel           string  `json:"cpu_model,omitempty"`
+	MemoryTotalGB      float64 `json:"memory_total_gb,omitempty"`
+	MemoryFreeGB       float64 `json:"memory_free_gb,omitempty"`
+	DiskTotalGB        float64 `json:"disk_total_gb,omitempty"`
+	DiskFreeGB         float64 `json:"disk_free_gb,omitempty"`
+	PlatformVersion    string  `json:"platform_version,omitempty"`
+	GoVersion          string  `json:"go_version,omitempty"`
+	SystemUptimeSecond int64   `json:"system_uptime_seconds,omitempty"`
+	Username           string  `json:"username,omitempty"`
 }
 
 // deviceIDStorePath 设备ID持久化路径
@@ -157,6 +164,38 @@ func CollectDeviceFacts() DeviceFacts {
 	return facts
 }
 
+// CollectExtendedDeviceInfo 采集扩展设备信息（包括内存、磁盘等）
+func CollectExtendedDeviceInfo() map[string]interface{} {
+	info := make(map[string]interface{})
+
+	// CPU信息
+	if cpus, err := getCPUInfo(); err == nil {
+		info["cpu_model"] = cpus
+	}
+
+	// 内存信息
+	if mem, err := getMemoryInfo(); err == nil {
+		info["memory_total_gb"] = mem["total"]
+		info["memory_free_gb"] = mem["free"]
+	}
+
+	// 磁盘信息
+	if disk, err := getDiskInfo(); err == nil {
+		info["disk_total_gb"] = disk["total"]
+		info["disk_free_gb"] = disk["free"]
+	}
+
+	// Go版本
+	info["go_version"] = runtime.Version()
+
+	// 系统运行时间
+	if uptime, err := getSystemUptime(); err == nil {
+		info["system_uptime_seconds"] = uptime
+	}
+
+	return info
+}
+
 // BuildDeviceID 构建设备ID
 func BuildDeviceID(serverURL string, providedDeviceID string, facts DeviceFacts, softwareName string) (string, error) {
 	if providedDeviceID != "" {
@@ -229,6 +268,30 @@ func BuildDeviceInfo(facts DeviceFacts, override *DeviceInfo) DeviceInfo {
 		info.Username = u.Username
 	}
 
+	// 收集扩展信息
+	extended := CollectExtendedDeviceInfo()
+	if cpuModel, ok := extended["cpu_model"].(string); ok {
+		info.CPUModel = cpuModel
+	}
+	if memTotal, ok := extended["memory_total_gb"].(float64); ok {
+		info.MemoryTotalGB = memTotal
+	}
+	if memFree, ok := extended["memory_free_gb"].(float64); ok {
+		info.MemoryFreeGB = memFree
+	}
+	if diskTotal, ok := extended["disk_total_gb"].(float64); ok {
+		info.DiskTotalGB = diskTotal
+	}
+	if diskFree, ok := extended["disk_free_gb"].(float64); ok {
+		info.DiskFreeGB = diskFree
+	}
+	if goVer, ok := extended["go_version"].(string); ok {
+		info.GoVersion = goVer
+	}
+	if uptime, ok := extended["system_uptime_seconds"].(int64); ok {
+		info.SystemUptimeSecond = uptime
+	}
+
 	return info
 }
 
@@ -294,4 +357,78 @@ func getIPAddress() string {
 		}
 	}
 	return ""
+}
+
+func getCPUInfo() (string, error) {
+	// 尝试从 /proc/cpuinfo 读取 CPU 型号（Linux）
+	if runtime.GOOS == "linux" {
+		if data, err := os.ReadFile("/proc/cpuinfo"); err == nil {
+			lines := strings.Split(string(data), "\n")
+			for _, line := range lines {
+				if strings.HasPrefix(line, "model name") {
+					parts := strings.Split(line, ":")
+					if len(parts) > 1 {
+						return strings.TrimSpace(parts[1]), nil
+					}
+				}
+			}
+		}
+	}
+	return "", fmt.Errorf("cpu info not available")
+}
+
+func getMemoryInfo() (map[string]float64, error) {
+	result := make(map[string]float64)
+	
+	// 尝试从 /proc/meminfo 读取内存信息（Linux）
+	if runtime.GOOS == "linux" {
+		if data, err := os.ReadFile("/proc/meminfo"); err == nil {
+			lines := strings.Split(string(data), "\n")
+			var memTotal, memFree float64
+			for _, line := range lines {
+				if strings.HasPrefix(line, "MemTotal:") {
+					parts := strings.Fields(line)
+					if len(parts) > 1 {
+						fmt.Sscanf(parts[1], "%f", &memTotal)
+					}
+				} else if strings.HasPrefix(line, "MemFree:") {
+					parts := strings.Fields(line)
+					if len(parts) > 1 {
+						fmt.Sscanf(parts[1], "%f", &memFree)
+					}
+				}
+			}
+			if memTotal > 0 {
+				result["total"] = memTotal / (1024 * 1024)
+				result["free"] = memFree / (1024 * 1024)
+				return result, nil
+			}
+		}
+	}
+	
+	return result, fmt.Errorf("memory info not available")
+}
+
+func getDiskInfo() (map[string]float64, error) {
+	result := make(map[string]float64)
+	
+	// 简化实现：仅返回空值
+	// 完整实现需要调用系统命令或使用 syscall
+	return result, fmt.Errorf("disk info not available")
+}
+
+func getSystemUptime() (int64, error) {
+	// 尝试从 /proc/uptime 读取系统运行时间（Linux）
+	if runtime.GOOS == "linux" {
+		if data, err := os.ReadFile("/proc/uptime"); err == nil {
+			parts := strings.Fields(string(data))
+			if len(parts) > 0 {
+				var uptime float64
+				fmt.Sscanf(parts[0], "%f", &uptime)
+				return int64(uptime), nil
+			}
+		}
+	}
+	
+	return 0, fmt.Errorf("uptime not available")
 }

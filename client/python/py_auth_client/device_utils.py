@@ -100,6 +100,7 @@ def collect_device_facts() -> Dict[str, Optional[str]]:
     try:
         mem = psutil.virtual_memory()
         facts["memory_total_gb"] = round(mem.total / (1024**3), 2)
+        facts["memory_free_gb"] = round(mem.available / (1024**3), 2)
     except Exception:
         pass
 
@@ -110,6 +111,7 @@ def collect_device_facts() -> Dict[str, Optional[str]]:
             disk_id = partitions[0].device or partitions[0].mountpoint
             disk_usage = psutil.disk_usage(partitions[0].mountpoint)
             facts["disk_total_gb"] = round(disk_usage.total / (1024**3), 2)
+            facts["disk_free_gb"] = round(disk_usage.free / (1024**3), 2)
     except Exception:
         pass
     facts["disk_id"] = disk_id
@@ -163,7 +165,7 @@ def build_device_info(facts: Dict[str, Optional[str]], device_info_override: Opt
     if device_info_override is not None:
         return device_info_override
 
-    info: Dict[str] = {
+    info: Dict[str, Any] = {
         "hostname": facts.get("hostname_value"),
         "system": facts.get("system"),
         "release": facts.get("release"),
@@ -182,12 +184,31 @@ def build_device_info(facts: Dict[str, Optional[str]], device_info_override: Opt
         info["cpu_freq_mhz"] = freq
     if mem := facts.get("memory_total_gb"):
         info["memory_total_gb"] = mem
+    if mem_free := facts.get("memory_free_gb"):
+        info["memory_free_gb"] = mem_free
     if disk := facts.get("disk_total_gb"):
         info["disk_total_gb"] = disk
+    if disk_free := facts.get("disk_free_gb"):
+        info["disk_free_gb"] = disk_free
 
     try:
         import getpass
         info["username"] = getpass.getuser()
+    except Exception:
+        pass
+
+    # 收集Python版本
+    try:
+        import sys
+        info["python_version"] = sys.version
+    except Exception:
+        pass
+
+    # 收集系统运行时间
+    try:
+        uptime = psutil.boot_time()
+        import time
+        info["system_uptime_seconds"] = int(time.time() - uptime)
     except Exception:
         pass
 

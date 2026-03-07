@@ -8,9 +8,14 @@ export interface DeviceInfo {
   mac_address?: string;
   ip_address?: string;
   cpu_count?: number;
+  cpu_model?: string;
   cpu_freq_mhz?: number;
   memory_total_gb?: number;
+  memory_free_gb?: number;
   disk_total_gb?: number;
+  platform_version?: string;
+  node_version?: string;
+  system_uptime_seconds?: number;
   username?: string;
 }
 
