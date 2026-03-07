@@ -10,14 +10,6 @@
           <p>管理系统全局设置</p>
         </div>
       </div>
-       <div class="header-right">
-        <router-link to="/">
-          <el-button>
-            <el-icon><ArrowLeft /></el-icon>
-            返回设备管理
-          </el-button>
-        </router-link>
-      </div>
     </header>
 
     <main class="content">
@@ -45,7 +37,7 @@
 import { ref, onMounted } from 'vue'
 import { api } from '../api'
 import { ElMessage } from 'element-plus'
-import { Refresh, Setting, ArrowLeft } from '@element-plus/icons-vue'
+import { Refresh, Setting } from '@element-plus/icons-vue'
 
 const loading = ref(false)
 const saving = ref(false)
@@ -125,16 +117,6 @@ onMounted(() => {
   font-size: 12px;
   opacity: 0.8;
   margin: 0;
-}
-
-.header-right .el-button {
-  background: rgba(255,255,255,0.2);
-  border-color: rgba(255,255,255,0.3);
-  color: white;
-}
-
-.header-right .el-button:hover {
-  background: rgba(255,255,255,0.3);
 }
 
 .content {
