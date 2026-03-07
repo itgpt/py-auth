@@ -12,8 +12,6 @@ class DeviceAuthRequest(BaseModel):
     software_name: Optional[str] = None  # 软件名
     device_info: Optional[Dict[str, Any]] = None  # 设备信息（JSON格式，包含hostname等）
 
-DeviceCreate = DeviceAuthRequest  # 向后兼容别名
-
 class DeviceResponse(BaseModel):
     id: int
     device_id: str
@@ -27,13 +25,6 @@ class DeviceResponse(BaseModel):
     
     class Config:
         from_attributes = True
-
-# 向后兼容：保留 AuthCheckRequest 作为别名
-AuthCheckRequest = DeviceAuthRequest
-
-class AuthCheckResponse(BaseModel):
-    authorized: bool
-    message: str
 
 class EncryptedResponse(BaseModel):
     """加密的响应数据"""

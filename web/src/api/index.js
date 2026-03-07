@@ -108,6 +108,15 @@ class ApiService {
     return this.request(`/admin/logs?page=${page}&page_size=${pageSize}`)
   }
 
+  async cleanupOperationLogs(days) {
+    if (!Number.isInteger(days) || days < 0) {
+      throw new Error('days 必须是大于等于 0 的整数')
+    }
+    return this.request(`/admin/logs?days=${days}`, {
+      method: 'DELETE'
+    })
+  }
+
   // 用户管理
   async getUsers() {
     return this.request('/admin/users')

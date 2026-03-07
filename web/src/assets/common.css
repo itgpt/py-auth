@@ -4,46 +4,6 @@
   background: var(--color-bg-secondary);
 }
 
-.page-header {
-  background: var(--color-primary-gradient);
-  color: white;
-  padding: var(--spacing-md) var(--spacing-lg);
-  display: flex;
-  justify-content: flex-start;
-  align-items: center;
-  gap: var(--spacing-md);
-}
-
-.page-header-left {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-md);
-}
-
-.page-header-icon {
-  width: 36px;
-  height: 36px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(255, 255, 255, 0.2);
-  border-radius: var(--radius-lg);
-}
-
-.page-header-title h1 {
-  font-size: 18px;
-  font-weight: 600;
-  margin: 0;
-  line-height: 1.2;
-}
-
-.page-header-title p {
-  font-size: 12px;
-  opacity: 0.8;
-  margin: 0;
-  line-height: 1.2;
-}
-
 .page-content {
   padding: var(--spacing-lg);
   max-width: 1200px;
@@ -253,10 +213,6 @@
 
 /* 响应式 */
 @media (max-width: 768px) {
-  .page-header {
-    padding: var(--spacing-md) var(--spacing-md);
-  }
-
   .page-content {
     padding: var(--spacing-md);
   }
@@ -281,14 +237,6 @@
 }
 
 @media (max-width: 480px) {
-  .page-header {
-    padding: var(--spacing-sm) var(--spacing-md);
-  }
-
-  .page-header-title h1 {
-    font-size: 16px;
-  }
-
   .page-content {
     padding: var(--spacing-md);
   }

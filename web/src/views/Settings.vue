@@ -32,6 +32,18 @@
           <el-icon class="is-loading" :size="20"><Refresh /></el-icon>
           <span>加载中...</span>
         </div>
+
+        <el-divider />
+        <div class="cleanup-header">
+          <h3>审计日志清理</h3>
+          <p>按天清理历史日志，输入 0 表示全部清空。</p>
+        </div>
+        <div class="cleanup-actions">
+          <el-input-number v-model="cleanupDays" :min="0" :max="3650" controls-position="right" />
+          <el-button type="warning" :loading="cleaning" @click="cleanupOldLogs">
+            {{ cleanupDays === 0 ? '全部清空日志' : `清空 ${cleanupDays} 天前` }}
+          </el-button>
+        </div>
       </div>
     </main>
   </div>
@@ -40,7 +52,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { api } from '../api'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
 
 const configFields = [
@@ -58,6 +70,8 @@ const defaultConfigs = {
 
 const loading = ref(false)
 const saving = ref(false)
+const cleaning = ref(false)
+const cleanupDays = ref(30)
 const configs = ref({ ...defaultConfigs })
 
 const loadConfigs = async () => {
@@ -87,6 +101,35 @@ const save = async () => {
     ElMessage.error(e.message || '保存失败')
   } finally {
     saving.value = false
+  }
+}
+
+const cleanupOldLogs = async () => {
+  const isClearAll = cleanupDays.value === 0
+  const confirmMessage = isClearAll
+    ? '将清空全部审计日志且不可恢复，是否继续？'
+    : `将删除 ${cleanupDays.value} 天前的审计日志，是否继续？`
+  const confirmTitle = isClearAll ? '高风险操作确认' : '确认清理'
+  const confirmType = isClearAll ? 'error' : 'warning'
+
+  try {
+    await ElMessageBox.confirm(
+      confirmMessage,
+      confirmTitle,
+      { type: confirmType }
+    )
+  } catch {
+    return
+  }
+
+  cleaning.value = true
+  try {
+    const result = await api.cleanupOperationLogs(cleanupDays.value)
+    ElMessage.success(`已处理 ${result.deleted_count || 0} 条日志`)
+  } catch (e) {
+    ElMessage.error(e.message || '操作失败')
+  } finally {
+    cleaning.value = false
   }
 }
 
@@ -129,9 +172,38 @@ onMounted(() => {
   gap: 8px;
 }
 
+.cleanup-header h3 {
+  margin: 0;
+  font-size: 14px;
+  color: var(--color-text-primary);
+}
+
+.cleanup-header p {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--color-text-tertiary);
+}
+
+.cleanup-actions {
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 @media (max-width: 768px) {
   :deep(.el-form-item__label) {
     width: 120px !important;
+  }
+
+  .cleanup-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .cleanup-actions .el-button {
+    width: 100%;
   }
 }
 </style>

@@ -1,5 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
+from datetime import datetime, timedelta
 from app.database import get_db
 from app.models import User, Config, OperationLog
 from app.schemas import (
@@ -17,27 +18,12 @@ DEFAULT_CONFIGS = {
 }
 
 
-def _normalize_config_value(key: str, value):
-    """规范化配置值，确保关键配置类型稳定。"""
-    if key == "default_authorization":
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, str):
-            return value.strip().lower() in ("1", "true", "yes", "on")
-        return bool(value)
-
-    return value
-
-
-def _merged_configs(db: Session) -> dict:
-    db_configs = {c.key: c.value for c in db.query(Config).all()}
-    merged = DEFAULT_CONFIGS.copy()
-    for key in DEFAULT_CONFIGS.keys():
-        if key in db_configs:
-            merged[key] = db_configs[key]
-    for key in ("default_authorization",):
-        merged[key] = _normalize_config_value(key, merged.get(key))
-    return merged
+def _parse_default_authorization(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    return bool(value)
 
 
 def _add_operation_log(
@@ -61,7 +47,10 @@ async def get_configs(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    return _merged_configs(db)
+    config = db.query(Config).filter(Config.key == "default_authorization").first()
+    if not config:
+        return DEFAULT_CONFIGS.copy()
+    return {"default_authorization": _parse_default_authorization(config.value)}
 
 @router.put("/config")
 async def update_configs(
@@ -74,7 +63,8 @@ async def update_configs(
     for key, value in config_update.configs.items():
         if key not in allowed_keys:
             continue
-        normalized[key] = _normalize_config_value(key, value)
+        if key == "default_authorization":
+            normalized[key] = _parse_default_authorization(value)
 
     for key, value in normalized.items():
         config = db.query(Config).filter(Config.key == key).first()
@@ -138,6 +128,45 @@ async def get_operation_logs(
     return {
         "total": total,
         "logs": [OperationLogResponse.model_validate(item) for item in logs]
+    }
+
+
+@router.delete("/logs")
+async def cleanup_operation_logs(
+    days: int = Query(..., ge=0, description="清理天数，0 表示全部清空"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    check_admin(current_user)
+    if days <= 0:
+        deleted_count = db.query(OperationLog).delete()
+        mode = "all"
+    else:
+        cutoff = datetime.now() - timedelta(days=days)
+        deleted_count = (
+            db.query(OperationLog)
+            .filter(OperationLog.created_at < cutoff)
+            .delete()
+        )
+        mode = "older_than_days"
+
+    _add_operation_log(
+        db,
+        username=current_user.username,
+        action="cleanup_logs",
+        target_type="operation_log",
+        target_id=None,
+        detail={"mode": mode, "days": days, "deleted_count": deleted_count}
+    )
+    db.commit()
+    if days <= 0:
+        message = "已清空全部审计日志"
+    else:
+        message = f"已清理 {days} 天前日志"
+    return {
+        "message": message,
+        "deleted_count": deleted_count,
+        "days": days
     }
 
 @router.post("/users", response_model=UserResponse)
