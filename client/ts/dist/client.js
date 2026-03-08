@@ -9,6 +9,7 @@ const http_1 = require("./http");
 class AuthClient {
     serverUrl;
     softwareName;
+    softwareVersion;
     deviceId;
     deviceInfo;
     clientSecret;
@@ -25,10 +26,14 @@ class AuthClient {
         }
         this.serverUrl = config.serverUrl.replace(/\/+$/, "");
         this.softwareName = config.softwareName;
+        this.softwareVersion = config.softwareVersion ?? "0.0.0";
         this.clientSecret = secret;
         this.debug = !!config.debug;
         this.deviceId = (0, device_1.buildDeviceId)(this.serverUrl, config.deviceId, this.softwareName);
-        this.deviceInfo = config.deviceInfo ?? (0, device_1.collectDeviceInfo)();
+        this.deviceInfo = {
+            ...(config.deviceInfo ?? (0, device_1.collectDeviceInfo)()),
+            software_version: this.softwareVersion,
+        };
         const enableCache = config.enableCache ?? true;
         const cacheValidityDays = config.cacheValidityDays ?? 7;
         const checkIntervalDays = config.checkIntervalDays ?? 2;

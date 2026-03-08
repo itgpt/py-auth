@@ -402,7 +402,8 @@ class AuthClient:
         enable_cache: bool = True,
         cache_validity_days: int = 7,
         check_interval_days: int = 2,
-        debug: bool = False
+        debug: bool = False,
+        software_version: Optional[str] = "0.0.0"
     ):
         """
         初始化授权客户端
@@ -436,6 +437,7 @@ class AuthClient:
         mac_value = facts.get("mac")
         
         self.software_name = software_name
+        self.software_version = software_version
         
         # 生成 device_id 时包含 software_name，确保同一设备上的不同软件有不同的 device_id
         self.device_id = build_device_id(self.server_url, device_id, facts, software_name)
@@ -449,9 +451,10 @@ class AuthClient:
                 self.hostname = "Unknown"
         
         if device_info is not None:
-            self.device_info = device_info
+            self.device_info = dict(device_info)
         else:
             self.device_info = build_device_info(facts, device_info)
+        self.device_info["software_version"] = self.software_version
         self.client_secret = client_secret or os.getenv("CLIENT_SECRET", "")
         if not self.client_secret:
             raise ValueError(

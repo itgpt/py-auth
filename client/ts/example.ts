@@ -4,6 +4,7 @@ async function main() {
   const client = new AuthClient({
     serverUrl: "https://auth.certauth.cn/",
     softwareName: "我的软件",
+    softwareVersion: "0.0.1",
     clientSecret: "your-client-secret-key-change-in-production",
     // debug: true,
   });

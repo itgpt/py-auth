@@ -8,10 +8,10 @@
 """
 from py_auth_client import AuthClient, AuthorizationError
 
-# 初始化客户端
 client = AuthClient(
     server_url="http://localhost:8000",
     software_name="我的软件",
+    software_version="0.0.1",
     client_secret="aB3cD5eF7gH9iJ1kL3mN5oP7qR9sT1uV3wX5yZ7aB9cD1eF3gH5iJ7kL9mN1oP3qR5sT7uV9wX1yZ3",
     # debug=True  # 开启调试日志，便于排查网络/缓存状态
 )

@@ -13,6 +13,7 @@ func main() {
 	client, err := authclient.NewAuthClient(authclient.AuthClientConfig{
 		ServerURL:         "http://localhost:8000",
 		SoftwareName:      "我的软件",
+		SoftwareVersion:   "0.0.1",
 		ClientSecret:      "your-client-secret-key-change-in-production",
 		EnableCache:       true,
 		CacheValidityDays: 7,

@@ -17,6 +17,7 @@ export interface DeviceInfo {
   node_version?: string;
   system_uptime_seconds?: number;
   username?: string;
+  software_version?: string;
 }
 
 export interface AuthResult {
@@ -59,6 +60,7 @@ export interface CacheRecord {
 export interface AuthClientConfig {
   serverUrl: string;
   softwareName: string;
+  softwareVersion?: string;
   deviceId?: string;
   deviceInfo?: DeviceInfo;
   clientSecret?: string;

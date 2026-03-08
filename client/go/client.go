@@ -82,6 +82,7 @@ func (e *AuthorizationError) IsValidationError() bool {
 type AuthClient struct {
 	serverURL         string
 	softwareName      string
+	softwareVersion   string
 	deviceID          string
 	deviceInfo        DeviceInfo
 	clientSecret      string
@@ -96,6 +97,7 @@ type AuthClient struct {
 type AuthClientConfig struct {
 	ServerURL         string
 	SoftwareName      string
+	SoftwareVersion   string
 	DeviceID          string
 	DeviceInfo        *DeviceInfo
 	ClientSecret      string
@@ -125,6 +127,7 @@ func NewAuthClient(config AuthClientConfig) (*AuthClient, error) {
 	client := &AuthClient{
 		serverURL:         config.ServerURL,
 		softwareName:      config.SoftwareName,
+		softwareVersion:   config.SoftwareVersion,
 		clientSecret:      config.ClientSecret,
 		enableCache:       config.EnableCache,
 		cacheValidityDays: config.CacheValidityDays,
@@ -156,6 +159,7 @@ func NewAuthClient(config AuthClientConfig) (*AuthClient, error) {
 
 	// 构建设备信息
 	client.deviceInfo = BuildDeviceInfo(facts, config.DeviceInfo)
+	client.deviceInfo.SoftwareVersion = client.softwareVersion
 
 	// 初始化缓存
 	if client.enableCache {

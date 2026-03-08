@@ -4,13 +4,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"github.com/google/uuid"
 	"os"
 	"os/exec"
 	"os/user"
 	"path/filepath"
 	"runtime"
 	"strings"
-	"github.com/google/uuid"
 )
 
 // DeviceFacts 设备硬件信息
@@ -47,6 +47,7 @@ type DeviceInfo struct {
 	GoVersion          string  `json:"go_version,omitempty"`
 	SystemUptimeSecond int64   `json:"system_uptime_seconds,omitempty"`
 	Username           string  `json:"username,omitempty"`
+	SoftwareVersion    string  `json:"software_version,omitempty"`
 }
 
 // deviceIDStorePath 设备ID持久化路径

@@ -2,6 +2,7 @@ import type { AuthClientConfig, AuthResult, AuthorizationInfo } from "./types";
 export declare class AuthClient {
     private readonly serverUrl;
     private readonly softwareName;
+    private readonly softwareVersion;
     private readonly deviceId;
     private readonly deviceInfo;
     private readonly clientSecret;

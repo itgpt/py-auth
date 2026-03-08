@@ -23,6 +23,7 @@ type HeartbeatResponseDecrypted = {
 export class AuthClient {
   private readonly serverUrl: string;
   private readonly softwareName: string;
+  private readonly softwareVersion: string;
   private readonly deviceId: string;
   private readonly deviceInfo: DeviceInfo;
   private readonly clientSecret: string;
@@ -42,11 +43,15 @@ export class AuthClient {
 
     this.serverUrl = config.serverUrl.replace(/\/+$/, "");
     this.softwareName = config.softwareName;
+    this.softwareVersion = config.softwareVersion ?? "0.0.0";
     this.clientSecret = secret;
     this.debug = !!config.debug;
 
     this.deviceId = buildDeviceId(this.serverUrl, config.deviceId, this.softwareName);
-    this.deviceInfo = config.deviceInfo ?? collectDeviceInfo();
+    this.deviceInfo = {
+      ...(config.deviceInfo ?? collectDeviceInfo()),
+      software_version: this.softwareVersion,
+    };
 
     const enableCache = config.enableCache ?? true;
     const cacheValidityDays = config.cacheValidityDays ?? 7;
