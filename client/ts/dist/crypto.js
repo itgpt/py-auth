@@ -4,14 +4,11 @@ exports.encryptData = encryptData;
 exports.decryptData = decryptData;
 const node_crypto_1 = require("node:crypto");
 function b64UrlEncode(buf) {
-    return buf
-        .toString("base64")
-        .replace(/\+/g, "-")
-        .replace(/\//g, "_")
-        .replace(/=+$/g, "");
+    return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_");
 }
 function b64UrlDecode(s) {
-    const padded = s.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((s.length + 3) % 4);
+    const normalized = s.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = normalized + "===".slice((normalized.length + 3) % 4);
     return Buffer.from(padded, "base64");
 }
 function timingSafeEqual(a, b) {
@@ -27,7 +24,8 @@ function deriveFernetKey(clientSecret) {
     return digest.subarray(0, 32);
 }
 function pkcs7Pad(data, blockSize = 16) {
-    const padLen = blockSize - (data.length % blockSize || blockSize);
+    const rem = data.length % blockSize;
+    const padLen = rem === 0 ? blockSize : blockSize - rem;
     return Buffer.concat([data, Buffer.alloc(padLen, padLen)]);
 }
 function pkcs7Unpad(data, blockSize = 16) {
