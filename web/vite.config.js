@@ -2,7 +2,20 @@ import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 
 export default defineConfig({
-  plugins: [vue()],
+  plugins: [
+    vue(),
+    {
+      name: 'markdown-loader',
+      transform(code, id) {
+        if (id.endsWith('.md')) {
+          return {
+            code: `export default ${JSON.stringify(code)}`,
+            map: null
+          }
+        }
+      }
+    }
+  ],
   base: '/',
   build: {
     outDir: 'dist',

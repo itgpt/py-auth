@@ -33,7 +33,15 @@
         </div>
 
         <!-- 桌面端表格 -->
-        <el-table :data="devices" :loading="loading" stripe border class="desktop-table">
+        <el-table 
+          :data="devices" 
+          :loading="loading" 
+          stripe 
+          border 
+          class="desktop-table"
+          @sort-change="handleSortChange"
+          :default-sort="{ prop: sortBy, order: sortOrder === 'asc' ? 'ascending' : 'descending' }"
+        >
           <el-table-column prop="device_id" label="设备ID" min-width="200" show-overflow-tooltip>
             <template #default="{ row }">
               <code class="device-id">{{ row.device_id }}</code>
@@ -60,13 +68,13 @@
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column prop="created_at" label="创建时间" width="160">
+          <el-table-column prop="created_at" label="创建时间" width="160" sortable="custom">
             <template #default="{ row }">{{ formatDate(row.created_at) }}</template>
           </el-table-column>
-          <el-table-column prop="updated_at" label="更新时间" width="160">
+          <el-table-column prop="updated_at" label="更新时间" width="160" sortable="custom">
             <template #default="{ row }">{{ formatDate(row.updated_at) }}</template>
           </el-table-column>
-          <el-table-column prop="last_check" label="最后检查" width="160">
+          <el-table-column prop="last_check" label="最后检查" width="160" sortable="custom">
             <template #default="{ row }">{{ formatDate(row.last_check) }}</template>
           </el-table-column>
           <el-table-column label="操作" width="270" fixed="right" align="center">
@@ -174,6 +182,8 @@ const selectedDevice = ref(null)
 const currentPage = ref(1)
 const pageSize = ref(50)
 const total = ref(0)
+const sortBy = ref('updated_at')
+const sortOrder = ref('desc')
 let deviceSocket = null
 let reconnectTimer = null
 let reconnectEnabled = true
@@ -318,7 +328,9 @@ const loadDevices = async () => {
     const data = await sendWsRequest({
       type: 'get_devices',
       page: currentPage.value,
-      page_size: pageSize.value
+      page_size: pageSize.value,
+      sort_by: sortBy.value,
+      sort_order: sortOrder.value
     })
     applyDevicesPayload(data)
   } catch (e) {
@@ -331,6 +343,17 @@ const loadDevices = async () => {
   } finally {
     loading.value = false
   }
+}
+
+const handleSortChange = ({ prop, order }) => {
+  if (!prop || !order) {
+    sortBy.value = 'updated_at'
+    sortOrder.value = 'desc'
+  } else {
+    sortBy.value = prop
+    sortOrder.value = order === 'ascending' ? 'asc' : 'desc'
+  }
+  loadDevices()
 }
 
 const formatDate = (dateStr) => {

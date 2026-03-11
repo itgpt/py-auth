@@ -3,6 +3,7 @@ import AdminPanel from './components/AdminPanel.vue'
 import Settings from './views/Settings.vue'
 import Users from './views/Users.vue'
 import AuditLogs from './views/AuditLogs.vue'
+import Docs from './views/Docs.vue'
 import LoginForm from './components/LoginForm.vue'
 import AdminLayout from './views/AdminLayout.vue'
 
@@ -36,6 +37,11 @@ const routes = [
         path: 'logs',
         name: 'AuditLogs',
         component: AuditLogs,
+      },
+      {
+        path: 'docs',
+        name: 'Docs',
+        component: Docs,
       }
     ]
   }

@@ -54,6 +54,9 @@ import { ref, onMounted } from 'vue'
 import { api } from '../api'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
+import { useRouter } from 'vue-router'
+
+const router = useRouter()
 
 const configFields = [
   {
@@ -82,7 +85,12 @@ const loadConfigs = async () => {
       configs.value = { ...defaultConfigs, ...data }
     }
   } catch (e) {
-    ElMessage.error(e.message || '加载配置失败')
+    if (e.message.includes('登录已过期')) {
+      api.logout()
+      await router.push('/login')
+    } else {
+      ElMessage.error(e.message || '加载配置失败')
+    }
   } finally {
     loading.value = false
   }
@@ -98,7 +106,12 @@ const save = async () => {
     await api.updateConfigs(payload)
     ElMessage.success('配置已保存')
   } catch (e) {
-    ElMessage.error(e.message || '保存失败')
+    if (e.message.includes('登录已过期')) {
+      api.logout()
+      await router.push('/login')
+    } else {
+      ElMessage.error(e.message || '保存失败')
+    }
   } finally {
     saving.value = false
   }
@@ -127,7 +140,12 @@ const cleanupOldLogs = async () => {
     const result = await api.cleanupOperationLogs(cleanupDays.value)
     ElMessage.success(`已处理 ${result.deleted_count || 0} 条日志`)
   } catch (e) {
-    ElMessage.error(e.message || '操作失败')
+    if (e.message.includes('登录已过期')) {
+      api.logout()
+      await router.push('/login')
+    } else {
+      ElMessage.error(e.message || '操作失败')
+    }
   } finally {
     cleaning.value = false
   }

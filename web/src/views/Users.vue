@@ -113,7 +113,12 @@ const fetchUsers = async () => {
     users.value = usersData
     currentUser.value = meData
   } catch (error) {
-    ElMessage.error(`加载用户列表失败: ${error.message}`)
+    if (error.message.includes('登录已过期')) {
+      api.logout()
+      await router.push('/login')
+    } else {
+      ElMessage.error(`加载用户列表失败: ${error.message}`)
+    }
   } finally {
     loading.value = false
   }
