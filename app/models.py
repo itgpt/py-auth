@@ -7,12 +7,12 @@ class Device(Base):
     
     id = Column(Integer, primary_key=True, index=True)
     device_id = Column(String(255), unique=True, index=True, nullable=False)
-    software_name = Column(String(255), nullable=True)  # 软件名
-    device_info = Column(JSON, nullable=True)  # 设备信息（JSON格式，包含hostname等）
-    remark = Column(Text, nullable=True)  # 备注
-    is_authorized = Column(Boolean, default=True, nullable=False)  # 默认授权
+    software_name = Column(String(255), nullable=True)       
+    device_info = Column(JSON, nullable=True)                            
+    remark = Column(Text, nullable=True)      
+    is_authorized = Column(Boolean, default=True, nullable=False)        
     created_at = Column(DateTime, default=datetime.now)
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now)
     last_check = Column(DateTime, nullable=True)
     
     def __repr__(self):

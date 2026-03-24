@@ -14,7 +14,7 @@ router = APIRouter(tags=["管理"])
 
 @router.websocket("/ws")
 async def device_events(websocket: WebSocket):
-    # 验证token
+             
     token = websocket.query_params.get("token", "")
     actor = None
     if token:
@@ -34,11 +34,11 @@ async def device_events(websocket: WebSocket):
         await websocket.close(code=4401, reason="unauthorized")
         return
 
-    # 连接WebSocket
+                 
     await device_ws_manager.connect(websocket)
     await websocket.send_json({"type": "connected"})
     
-    # 发送初始设备列表（默认按更新时间降序）
+                         
     db = SessionLocal()
     try:
         query = db.query(Device)
@@ -53,7 +53,7 @@ async def device_events(websocket: WebSocket):
     finally:
         db.close()
     
-    # 消息循环
+          
     try:
         while True:
             text = await websocket.receive_text()
@@ -62,7 +62,7 @@ async def device_events(websocket: WebSocket):
             except Exception:
                 continue
 
-            # 获取设备列表（支持分页和排序）
+                             
             if data.get("type") == "get_devices":
                 request_id = data.get("request_id")
                 page = max(1, int(data.get("page", 1)))
@@ -75,7 +75,7 @@ async def device_events(websocket: WebSocket):
                     query = db.query(Device)
                     total = query.count()
                     
-                    # 排序字段映射
+                            
                     if sort_by == "created_at":
                         sort_field = Device.created_at
                     elif sort_by == "updated_at":
@@ -91,7 +91,7 @@ async def device_events(websocket: WebSocket):
                     else:
                         sort_field = Device.updated_at
                     
-                    # 应用排序
+                          
                     if sort_order.lower() == "asc":
                         query = query.order_by(sort_field.asc())
                     else:
@@ -110,7 +110,7 @@ async def device_events(websocket: WebSocket):
                     db.close()
                 continue
 
-            # 更新设备
+                  
             if data.get("type") == "update_device":
                 request_id = data.get("request_id")
                 try:
@@ -177,7 +177,7 @@ async def device_events(websocket: WebSocket):
                     })
                 continue
 
-            # 删除设备
+                  
             if data.get("type") == "delete_device":
                 request_id = data.get("request_id")
                 try:
@@ -219,6 +219,75 @@ async def device_events(websocket: WebSocket):
                         "request_id": request_id,
                         "message": str(e) or "删除失败"
                     })
+                continue
+
+            if data.get("type") == "delete_devices":
+                request_id = data.get("request_id")
+                try:
+                    raw = data.get("device_ids")
+                    if not isinstance(raw, list):
+                        raise ValueError("device_ids 须为非空数组")
+                    device_ids: list[str] = []
+                    seen: set[str] = set()
+                    for x in raw:
+                        s = str(x).strip()
+                        if s and s not in seen:
+                            seen.add(s)
+                            device_ids.append(s)
+                    if not device_ids:
+                        raise ValueError("device_ids 须为非空数组")
+                    if len(device_ids) > 200:
+                        raise ValueError("一次最多删除 200 台设备")
+
+                    db = SessionLocal()
+                    try:
+                        existing = (
+                            db.query(Device.device_id)
+                            .filter(Device.device_id.in_(device_ids))
+                            .all()
+                        )
+                        ids = [r[0] for r in existing]
+                        if not ids:
+                            raise ValueError("没有可删除的设备")
+                        db.query(Device).filter(Device.device_id.in_(ids)).delete(
+                            synchronize_session=False
+                        )
+                        for did in ids:
+                            db.add(
+                                OperationLog(
+                                    username=actor,
+                                    action="delete_device",
+                                    target_type="device",
+                                    target_id=did,
+                                    detail=None,
+                                )
+                            )
+                        db.commit()
+                        payload = {
+                            "type": "devices_deleted",
+                            "request_id": request_id,
+                            "device_ids": ids,
+                            "deleted_count": len(ids),
+                        }
+                        await websocket.send_json(payload)
+                        await device_ws_manager.broadcast(
+                            {
+                                "type": "devices_changed",
+                                "action": "deleted",
+                                "device_ids": ids,
+                            }
+                        )
+                    finally:
+                        db.close()
+                except Exception as e:
+                    await websocket.send_json(
+                        {
+                            "type": "error",
+                            "request_id": request_id,
+                            "message": str(e) or "批量删除失败",
+                        }
+                    )
+                continue
     except WebSocketDisconnect:
         device_ws_manager.disconnect(websocket)
     except Exception:

@@ -1,23 +1,30 @@
-import os from "node:os";
-import path from "node:path";
 import fs from "node:fs";
-import crypto from "node:crypto";
-import zlib from "node:zlib";
-import { execFileSync } from "node:child_process";
-import type { CacheRecord, CacheRecordWire } from "./types";
+import type { CacheRecord, DeviceInfo } from "./types";
+import {
+  BUNDLE_PRODUCT_DEVICE_INFO_SNAPSHOT_KEY,
+  BUNDLE_PRODUCT_REVOKE_KEYS,
+  BUNDLE_ROOT_STRAY_KEYS,
+  bundlePath,
+  commitAppsMap,
+  loadAppsMap,
+  normalizeServerUrl,
+  readStateDict,
+  rowDeviceId,
+  rowLastSuccessTs,
+  writeStateDictWithRetry,
+} from "./stateBundle";
 
 export class AuthCache {
   readonly cacheValiditySeconds: number;
   readonly checkIntervalSeconds: number;
   readonly cacheFile: string;
 
-  private readonly encryptKey: Buffer;
   private readonly deviceId: string;
+  private readonly serverUrl: string;
   private readonly softwareName: string;
-  private readonly cacheValidityDays: number;
-
+  private readonly cacheDir: string;
   constructor(args: {
-    cacheDir?: string;
+    storageRoot: string;
     deviceId: string;
     serverUrl: string;
     softwareName: string;
@@ -25,195 +32,156 @@ export class AuthCache {
     checkIntervalDays: number;
   }) {
     this.deviceId = args.deviceId;
+    this.serverUrl = normalizeServerUrl(args.serverUrl);
     this.softwareName = args.softwareName;
-    this.cacheValidityDays = args.cacheValidityDays;
 
-    this.cacheValiditySeconds = args.cacheValidityDays * 24 * 60 * 60;
-    this.checkIntervalSeconds = args.checkIntervalDays * 24 * 60 * 60;
+    const cacheValidityDays = args.cacheValidityDays > 0 ? args.cacheValidityDays : 7;
+    this.cacheValiditySeconds = cacheValidityDays * 24 * 60 * 60;
+    this.checkIntervalSeconds = (args.checkIntervalDays > 0 ? args.checkIntervalDays : 2) * 24 * 60 * 60;
 
-    const cacheDir = args.cacheDir ?? defaultCacheDir();
-    try {
-      fs.mkdirSync(cacheDir, { recursive: true });
-    } catch {
-      // ignore
-    }
-
-    const cacheKey = `${args.deviceId}:${args.softwareName}`;
-    const fileHash = crypto.createHash("md5").update(cacheKey, "utf8").digest("hex").slice(0, 12);
-    this.cacheFile = path.join(cacheDir, `runtime_${fileHash}.dat`);
-
-    const material = `${args.serverUrl}:${args.deviceId}:${args.softwareName}:obfuscate_v1`;
-    this.encryptKey = crypto.createHash("sha256").update(material, "utf8").digest();
+    this.cacheDir = args.storageRoot;
+    this.cacheFile = bundlePath(this.serverUrl, this.cacheDir);
   }
 
-  getCache(): CacheRecord | null {
-    try {
-      if (!fs.existsSync(this.cacheFile)) return null;
-      const encrypted = fs.readFileSync(this.cacheFile);
-      const decrypted = this.deobfuscate(encrypted);
-      if (!decrypted) return null;
-      const raw = JSON.parse(decrypted.toString("utf8")) as CacheRecordWire;
-      return {
-        authorized: !!raw.a,
-        message: raw.m ?? "",
-        cachedAt: Number(raw.c ?? 0),
-        lastCheck: Number(raw.l ?? 0),
-      };
-    } catch {
-      return null;
-    }
+  private readRow(): Record<string, unknown> | null {
+    const d = readStateDict(this.serverUrl, this.cacheDir);
+    if (!d) return null;
+    const row = loadAppsMap(d)[this.softwareName];
+    return row && typeof row === "object" && !Array.isArray(row) ? row : null;
   }
 
-  saveCache(authorized: boolean, message: string): boolean {
+  private cacheRecordFromRow(row: Record<string, unknown> | null): CacheRecord | null {
+    if (!row) return null;
+    const ts = rowLastSuccessTs(row);
+    if (ts === null) return null;
+    return {
+      authorized: true,
+      message: "设备已授权",
+      cachedAt: ts,
+    };
+  }
+
+  snapshotForAuthorizationCheck(): { cacheData: CacheRecord | null; storedHeartbeatTimes: number } {
     try {
-      const now = Date.now() / 1000;
-      const timeStr = formatPythonTimeString(now);
-      const fake = crypto.createHash("md5").update(timeStr, "utf8").digest("hex").slice(0, 8);
-
-      const payload: CacheRecordWire = {
-        a: authorized,
-        m: message,
-        c: now,
-        l: now,
-        v: 2,
-        f: fake,
-      };
-
-      const json = JSON.stringify(payload);
-      const encrypted = this.obfuscate(Buffer.from(json, "utf8"));
-      if (!encrypted) return false;
-
-      try {
-        fs.mkdirSync(path.dirname(this.cacheFile), { recursive: true });
-      } catch {
-        // ignore
+      const row = this.readRow();
+      if (!row || rowLastSuccessTs(row) === null) return { cacheData: null, storedHeartbeatTimes: 0 };
+      const raw = row.heartbeat_times;
+      const n = typeof raw === "number" && Number.isFinite(raw) ? Math.floor(raw) : Number(raw);
+      if (!Number.isFinite(n) || n < 1) {
+        this.clearCache();
+        return { cacheData: null, storedHeartbeatTimes: 0 };
       }
-
-      try {
-        fs.writeFileSync(this.cacheFile, encrypted);
-      } catch {
-        try {
-          if (fs.existsSync(this.cacheFile)) fs.unlinkSync(this.cacheFile);
-          fs.writeFileSync(this.cacheFile, encrypted);
-        } catch {
-          return false;
-        }
-      }
-
-      if (process.platform === "win32") {
-        try {
-          execFileSync("attrib", ["+H", this.cacheFile], { stdio: "ignore" });
-        } catch {
-          // ignore
-        }
-      }
-
-      return true;
+      return { cacheData: this.cacheRecordFromRow(row), storedHeartbeatTimes: n };
     } catch {
-      return false;
+      return { cacheData: null, storedHeartbeatTimes: 0 };
     }
   }
 
-  isCacheValid(): boolean {
-    const cache = this.getCache();
-    if (!cache) return false;
+  isCacheTTLValid(cache: CacheRecord | null): boolean {
+    if (!cache?.cachedAt) return false;
     const elapsed = Date.now() / 1000 - cache.cachedAt;
     return elapsed < this.cacheValiditySeconds;
   }
 
-  clearCache(): boolean {
-    try {
-      if (fs.existsSync(this.cacheFile)) fs.unlinkSync(this.cacheFile);
-      return true;
-    } catch {
-      return false;
-    }
+  needsCheck(): boolean {
+    const cache = this.getCache();
+    if (!cache?.cachedAt) return true;
+    const elapsed = Date.now() / 1000 - cache.cachedAt;
+    return elapsed >= this.checkIntervalSeconds;
   }
 
-  private obfuscate(data: Buffer): Buffer | null {
+  getCache(): CacheRecord | null {
     try {
-      const compressed = zlib.deflateSync(data, { level: 9 });
-
-      const xored = xorWithKey(compressed, this.encryptKey);
-
-      const timeSeed = Math.floor(Date.now() / 1000 / 3600);
-      const prefixSeed = crypto
-        .createHash("md5")
-        .update(`${this.deviceId}:${this.softwareName}:${timeSeed}`, "utf8")
-        .digest()
-        .subarray(0, 4);
-
-      const lenBuf = Buffer.alloc(4);
-      lenBuf.writeUInt32BE(xored.length, 0);
-      const packed = Buffer.concat([prefixSeed, lenBuf, xored]);
-
-      const finalKey = crypto.createHash("sha256").update(Buffer.concat([this.encryptKey, prefixSeed])).digest();
-      return xorWithKey(packed, finalKey);
+      return this.cacheRecordFromRow(this.readRow());
     } catch {
       return null;
     }
   }
 
-  private deobfuscate(data: Buffer): Buffer | null {
-    if (data.length < 8) return null;
-
-    const currentHour = Math.floor(Date.now() / 1000 / 3600);
-    const maxOffset = Math.max(2, this.cacheValidityDays * 24 + 12);
-
-    for (let hourOffset = -maxOffset; hourOffset <= maxOffset; hourOffset++) {
-      const timeSeed = currentHour + hourOffset;
-      const prefixSeed = crypto
-        .createHash("md5")
-        .update(`${this.deviceId}:${this.softwareName}:${timeSeed}`, "utf8")
-        .digest()
-        .subarray(0, 4);
-
-      const finalKey = crypto.createHash("sha256").update(Buffer.concat([this.encryptKey, prefixSeed])).digest();
-      const unpacked = xorWithKey(data, finalKey);
-
-      if (!unpacked.subarray(0, 4).equals(prefixSeed)) continue;
-
-      const length = unpacked.readUInt32BE(4);
-      if (length > unpacked.length - 8) continue;
-
-      const xored = unpacked.subarray(8, 8 + length);
-      const compressed = xorWithKey(xored, this.encryptKey);
-
-      try {
-        return zlib.inflateSync(compressed);
-      } catch {
-        continue;
+  loadDeviceInfoSnapshot(): DeviceInfo | null {
+    try {
+      const row = this.readRow();
+      if (!row) return null;
+      const raw = row[BUNDLE_PRODUCT_DEVICE_INFO_SNAPSHOT_KEY];
+      if (raw == null) return null;
+      if (typeof raw === "string") {
+        if (!raw.trim()) return null;
+        try {
+          const p = JSON.parse(raw) as unknown;
+          if (!p || typeof p !== "object" || Array.isArray(p)) return null;
+          return JSON.parse(JSON.stringify(p)) as DeviceInfo;
+        } catch {
+          return null;
+        }
       }
+      if (typeof raw === "object" && !Array.isArray(raw)) {
+        return JSON.parse(JSON.stringify(raw)) as DeviceInfo;
+      }
+      return null;
+    } catch {
+      return null;
     }
-
-    return null;
   }
-}
 
-function xorWithKey(data: Buffer, key: Buffer): Buffer {
-  const out = Buffer.allocUnsafe(data.length);
-  for (let i = 0; i < data.length; i++) {
-    out[i] = data[i]! ^ key[i % key.length]!;
-  }
-  return out;
-}
+  saveCache(authorized: boolean, _message: string, nextHeartbeat?: number, deviceInfoSnapshot?: DeviceInfo): boolean {
+    try {
+      const now = Date.now() / 1000;
 
-function defaultCacheDir(): string {
-  const home = os.homedir();
-  if (process.platform === "win32") {
-    const local = process.env.LOCALAPPDATA ?? path.join(home, "AppData", "Local");
-    return path.join(local, "Microsoft", "CLR_v4.0");
-  }
-  if (process.platform === "darwin") {
-    return path.join(home, "Library", "Caches", ".com.apple.metadata");
-  }
-  return path.join(home, ".cache", ".fontconfig");
-}
+      const cur = readStateDict(this.serverUrl, this.cacheDir) ?? {};
+      const payload: Record<string, unknown> = { ...cur };
+      for (const k of BUNDLE_ROOT_STRAY_KEYS) delete payload[k];
+      const apps = loadAppsMap(payload);
+      const sub: Record<string, unknown> = { ...(apps[this.softwareName] ?? {}) };
+      delete sub.software_name;
+      if (!authorized) {
+        for (const k of BUNDLE_PRODUCT_REVOKE_KEYS) delete sub[k];
+        sub.device_id = this.deviceId;
+      } else {
+        sub.device_id = this.deviceId;
+        sub.last_success_at = now;
+        if (nextHeartbeat !== undefined) sub.heartbeat_times = nextHeartbeat;
+        if (deviceInfoSnapshot !== undefined) {
+          sub[BUNDLE_PRODUCT_DEVICE_INFO_SNAPSHOT_KEY] = JSON.parse(JSON.stringify(deviceInfoSnapshot)) as Record<
+            string,
+            unknown
+          >;
+        }
+      }
+      apps[this.softwareName] = sub;
+      commitAppsMap(payload, apps);
 
-function formatPythonTimeString(nowSeconds: number): string {
-  // 目标：模拟 Python str(time.time()) 的大致风格（最短表示，必要时带 .0）
-  // 这里按 Go 实现保持一致：g/最短，但确保有小数点或 e
-  let s = String(nowSeconds);
-  if (!s.includes(".") && !s.includes("e")) s += ".0";
-  return s;
+      return writeStateDictWithRetry(this.serverUrl, payload, this.cacheDir);
+    } catch {
+      return false;
+    }
+  }
+
+  clearCache(): boolean {
+    try {
+      const d = readStateDict(this.serverUrl, this.cacheDir);
+      if (!d) return true;
+      const next: Record<string, unknown> = { ...d };
+      for (const k of BUNDLE_ROOT_STRAY_KEYS) delete next[k];
+      const apps = loadAppsMap(next);
+      const sub: Record<string, unknown> = { ...(apps[this.softwareName] ?? {}) };
+      for (const k of BUNDLE_PRODUCT_REVOKE_KEYS) delete sub[k];
+      delete sub.software_name;
+      sub.device_id = this.deviceId;
+      apps[this.softwareName] = sub;
+      commitAppsMap(next, apps);
+      const anyAppHasDevice = Object.values(apps).some((r) => {
+        if (!r || typeof r !== "object" || Array.isArray(r)) return false;
+        return rowDeviceId(r as Record<string, unknown>) != null;
+      });
+      if (!anyAppHasDevice) {
+        try {
+          if (fs.existsSync(this.cacheFile)) fs.unlinkSync(this.cacheFile);
+        } catch {}
+        return true;
+      }
+      return writeStateDictWithRetry(this.serverUrl, next, this.cacheDir);
+    } catch {
+      return false;
+    }
+  }
 }

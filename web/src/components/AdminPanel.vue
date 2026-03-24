@@ -1,7 +1,7 @@
 <template>
   <div class="admin-panel">
     <div class="content">
-      <!-- 统计卡片 -->
+      
       <div class="stats">
         <div class="stat-card">
           <div class="stat-icon total"><el-icon :size="24"><Box /></el-icon></div>
@@ -26,22 +26,33 @@
         </div>
       </div>
 
-      <!-- 设备列表 -->
+      
       <div class="device-section">
         <div class="section-header">
           <h2>设备列表</h2>
+          <div v-if="selectedCount > 0" class="section-actions">
+            <span class="selected-hint">已选 {{ selectedCount }} 项</span>
+            <el-button type="danger" size="small" :loading="bulkDeleting" @click="deleteSelectedDevices">
+              批量删除
+            </el-button>
+            <el-button type="primary" link size="small" @click="clearDeviceSelection">取消选择</el-button>
+          </div>
         </div>
 
-        <!-- 桌面端表格 -->
+        
         <el-table 
+          ref="tableRef"
+          row-key="device_id"
           :data="devices" 
           :loading="loading" 
           stripe 
           border 
           class="desktop-table"
           @sort-change="handleSortChange"
+          @selection-change="handleSelectionChange"
           :default-sort="{ prop: sortBy, order: sortOrder === 'asc' ? 'ascending' : 'descending' }"
         >
+          <el-table-column type="selection" width="48" :selectable="rowSelectable" />
           <el-table-column prop="device_id" label="设备ID" min-width="200" show-overflow-tooltip>
             <template #default="{ row }">
               <code class="device-id">{{ row.device_id }}</code>
@@ -68,13 +79,28 @@
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column prop="created_at" label="创建时间" width="160" sortable="custom">
+          <el-table-column prop="created_at" width="168" sortable="custom" show-overflow-tooltip>
+            <template #header>
+              <el-tooltip content="设备首次请求后不变" placement="top">
+                <span class="col-head-tip">注册时间</span>
+              </el-tooltip>
+            </template>
             <template #default="{ row }">{{ formatDate(row.created_at) }}</template>
           </el-table-column>
-          <el-table-column prop="updated_at" label="更新时间" width="160" sortable="custom">
+          <el-table-column prop="updated_at" min-width="188" width="188" sortable="custom" show-overflow-tooltip>
+            <template #header>
+              <el-tooltip content="管理员改授权/备注或设备信息变更" placement="top">
+                <span class="col-head-tip">管理变更追踪</span>
+              </el-tooltip>
+            </template>
             <template #default="{ row }">{{ formatDate(row.updated_at) }}</template>
           </el-table-column>
-          <el-table-column prop="last_check" label="最后检查" width="160" sortable="custom">
+          <el-table-column prop="last_check" width="168" sortable="custom" show-overflow-tooltip>
+            <template #header>
+              <el-tooltip content="每次成功心跳/授权校验" placement="top">
+                <span class="col-head-tip">活跃度</span>
+              </el-tooltip>
+            </template>
             <template #default="{ row }">{{ formatDate(row.last_check) }}</template>
           </el-table-column>
           <el-table-column label="操作" width="270" fixed="right" align="center">
@@ -88,7 +114,7 @@
           </el-table-column>
         </el-table>
 
-        <!-- 移动端卡片 -->
+        
         <div class="mobile-list">
           <div v-if="loading" class="loading-state">
             <el-icon class="is-loading" :size="20"><Refresh /></el-icon>
@@ -100,6 +126,12 @@
           <div v-else class="device-cards">
             <div v-for="device in devices" :key="device.device_id" class="device-card">
               <div class="card-header">
+                <el-checkbox
+                  class="card-select"
+                  :model-value="selectedIds.has(device.device_id)"
+                  :disabled="device._updating || bulkDeleting"
+                  @change="(v) => toggleMobileSelect(device.device_id, v)"
+                />
                 <code class="device-id">{{ device.device_id }}</code>
                 <el-tag :type="device.is_authorized ? 'success' : 'danger'" size="small">
                   {{ device.is_authorized ? '已授权' : '未授权' }}
@@ -111,15 +143,15 @@
                   <span class="value">{{ device.software_name }}</span>
                 </div>
                 <div class="info-row">
-                  <span class="label">创建：</span>
+                  <span class="label">注册时间：</span>
                   <span class="value">{{ formatDate(device.created_at) }}</span>
                 </div>
                 <div class="info-row" v-if="device.updated_at">
-                  <span class="label">更新：</span>
+                  <span class="label">管理变更追踪：</span>
                   <span class="value">{{ formatDate(device.updated_at) }}</span>
                 </div>
                 <div class="info-row" v-if="device.last_check">
-                  <span class="label">最后检查：</span>
+                  <span class="label">活跃度：</span>
                   <span class="value">{{ formatDate(device.last_check) }}</span>
                 </div>
                 <div class="info-row" v-if="device.device_info">
@@ -139,7 +171,7 @@
           </div>
         </div>
 
-        <!-- 分页 -->
+        
         <div class="pagination">
           <el-pagination
             v-model:current-page="currentPage"
@@ -153,14 +185,10 @@
         </div>
       </div>
 
-      <!-- 设备信息弹窗 -->
-      <el-dialog v-model="deviceInfoVisible" title="设备详情" width="90%" style="max-width: 500px;">
-        <el-descriptions :column="1" border v-if="selectedDevice?.device_info">
-          <el-descriptions-item v-for="(value, key) in selectedDevice.device_info" :key="key" :label="key">
-            {{ value ?? '-' }}
-          </el-descriptions-item>
-        </el-descriptions>
-        <el-empty v-else description="暂无信息" />
+      
+      <el-dialog v-model="deviceInfoVisible" title="设备详情" width="90%" style="max-width: 640px;">
+        <pre v-if="deviceInfoJsonText" class="device-info-json">{{ deviceInfoJsonText }}</pre>
+        <el-empty v-else description="暂无 device_info" />
       </el-dialog>
 
     </div>
@@ -168,17 +196,67 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted, computed } from 'vue'
-import { Refresh, Box, CircleCheck, CircleClose } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
-import { api } from '../api'
-import { useRouter } from 'vue-router'
+import { ref, onMounted, onUnmounted, computed, nextTick } from 'vue'
 
-const router = useRouter()
+
+function formatDeviceInfoJson(raw) {
+  if (raw == null || raw === '') return ''
+  try {
+    const o = typeof raw === 'string' ? JSON.parse(raw) : raw
+    return JSON.stringify(o, null, 2)
+  } catch {
+    return typeof raw === 'string' ? raw : JSON.stringify(raw, null, 2)
+  }
+}
+import { Refresh, Box, CircleCheck, CircleClose } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { api, notifySessionExpired, SESSION_EXPIRED_MESSAGE } from '../api'
+import { reportApiError } from '../utils/errorFeedback'
 const devices = ref([])
+const tableRef = ref(null)
 const loading = ref(false)
+const bulkDeleting = ref(false)
+const selectedIds = ref(new Set())
+let syncingTableSelection = false
+
+const selectedCount = computed(() => selectedIds.value.size)
+
+const setSelectedIds = (iter) => {
+  selectedIds.value = iter instanceof Set ? new Set(iter) : new Set(iter)
+}
+
+const rowSelectable = (row) => !row._updating && !bulkDeleting.value
+
+const handleSelectionChange = (rows) => {
+  if (syncingTableSelection) return
+  setSelectedIds(rows.map((r) => r.device_id))
+}
+
+const syncTableSelectionFromIds = () => {
+  const tbl = tableRef.value
+  if (!tbl) return
+  syncingTableSelection = true
+  const ids = selectedIds.value
+  for (const row of devices.value) {
+    tbl.toggleRowSelection(row, ids.has(row.device_id))
+  }
+  syncingTableSelection = false
+}
+
+const toggleMobileSelect = (deviceId, checked) => {
+  const s = new Set(selectedIds.value)
+  if (checked) s.add(deviceId)
+  else s.delete(deviceId)
+  setSelectedIds(s)
+  nextTick(() => syncTableSelectionFromIds())
+}
+
+const clearDeviceSelection = () => {
+  setSelectedIds([])
+  nextTick(() => tableRef.value?.clearSelection())
+}
 const deviceInfoVisible = ref(false)
-const selectedDevice = ref(null)
+const deviceInfoJsonText = ref('')
 const currentPage = ref(1)
 const pageSize = ref(50)
 const total = ref(0)
@@ -187,6 +265,9 @@ const sortOrder = ref('desc')
 let deviceSocket = null
 let reconnectTimer = null
 let reconnectEnabled = true
+
+let pendingDevicesReload = false
+let lastPageHiddenAt = 0
 let wsRequestSeq = 0
 const pendingWsRequests = new Map()
 
@@ -195,7 +276,9 @@ const unauthorizedCount = computed(() => devices.value.filter(d => !d.is_authori
 
 const requestDevicesReload = () => {
   if (!loading.value) {
-    loadDevices()
+    void loadDevices()
+  } else {
+    pendingDevicesReload = true
   }
 }
 
@@ -286,18 +369,17 @@ const connectWebSocket = () => {
         requestDevicesReload()
       }
     } catch {
-      // ignore invalid websocket messages
     }
   }
 
   deviceSocket.onclose = (event) => {
     deviceSocket = null
-    rejectPendingWsRequests('实时连接已断开')
     if (event.code === 4401) {
-      api.logout()
-      router.push('/login')
+      rejectPendingWsRequests(SESSION_EXPIRED_MESSAGE)
+      notifySessionExpired()
       return
     }
+    rejectPendingWsRequests('实时连接已断开')
 
     if (!reconnectEnabled) return
     const delay = 3000
@@ -334,14 +416,15 @@ const loadDevices = async () => {
     })
     applyDevicesPayload(data)
   } catch (e) {
-    if (e.message.includes('登录已过期')) {
-      api.logout()
-      router.push('/login')
-    } else {
-      ElMessage.error(e.message || '加载失败')
-    }
+    if (reportApiError(e, '加载失败')) return
   } finally {
     loading.value = false
+    setSelectedIds([])
+    nextTick(() => tableRef.value?.clearSelection())
+    if (pendingDevicesReload) {
+      pendingDevicesReload = false
+      void loadDevices()
+    }
   }
 }
 
@@ -366,7 +449,7 @@ const formatDate = (dateStr) => {
 }
 
 const showDeviceInfo = (device) => {
-  selectedDevice.value = device
+  deviceInfoJsonText.value = formatDeviceInfoJson(device?.device_info)
   deviceInfoVisible.value = true
 }
 
@@ -387,12 +470,12 @@ const saveRemark = async (device) => {
     ElMessage.success('备注已保存')
   } catch (e) {
     device._remarkValue = device._originalRemark
-    ElMessage.error(e.message || '保存失败')
+    reportApiError(e, '保存失败')
   }
 }
 
 const toggleAuth = async (device, authorize) => {
-  // 防止重复点击
+  
   if (device._updating) return
   device._updating = true
   try {
@@ -409,11 +492,7 @@ const toggleAuth = async (device, authorize) => {
     })
     ElMessage.success(authorize ? '已授权' : '已取消授权')
   } catch (e) {
-    if (e.message.includes('登录已过期')) {
-      api.logout()
-      router.push('/login')
-    }
-    else ElMessage.error(e.message || '操作失败')
+    reportApiError(e, '操作失败')
   } finally {
     device._updating = false
   }
@@ -427,24 +506,76 @@ const deleteDevice = async (device) => {
       device_id: device.device_id
     })
     devices.value = devices.value.filter(d => d.device_id !== device.device_id)
+    const s = new Set(selectedIds.value)
+    s.delete(device.device_id)
+    setSelectedIds(s)
+    nextTick(() => syncTableSelectionFromIds())
     ElMessage.success('已删除')
   } catch (e) {
-    if (e.message.includes('登录已过期')) {
-      api.logout()
-      router.push('/login')
-    }
-    else ElMessage.error(e.message || '删除失败')
+    reportApiError(e, '删除失败')
   } finally {
     device._updating = false
   }
 }
 
+const deleteSelectedDevices = async () => {
+  const ids = [...selectedIds.value]
+  if (ids.length === 0) return
+  try {
+    await ElMessageBox.confirm(
+      `确定删除选中的 ${ids.length} 台设备？此操作不可恢复。`,
+      '批量删除',
+      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }
+    )
+  } catch {
+    return
+  }
+  bulkDeleting.value = true
+  try {
+    const result = await sendWsRequest({
+      type: 'delete_devices',
+      device_ids: ids
+    })
+    const n = Number(result?.deleted_count ?? ids.length)
+    ElMessage.success(n > 0 ? `已删除 ${n} 台设备` : '已删除')
+    clearDeviceSelection()
+    await loadDevices()
+  } catch (e) {
+    reportApiError(e, '批量删除失败')
+  } finally {
+    bulkDeleting.value = false
+  }
+}
+
+const onVisibilityChange = () => {
+  if (document.hidden) {
+    lastPageHiddenAt = Date.now()
+    return
+  }
+  const awayMs = lastPageHiddenAt ? Date.now() - lastPageHiddenAt : 0
+  lastPageHiddenAt = 0
+
+  if (!deviceSocket || deviceSocket.readyState !== WebSocket.OPEN) {
+    reconnectEnabled = true
+    connectWebSocket()
+    return
+  }
+  
+  if (awayMs >= 3000) {
+    requestDevicesReload()
+  }
+}
+
 onMounted(() => {
+  reconnectEnabled = true
+  document.addEventListener('visibilitychange', onVisibilityChange)
   connectWebSocket()
 })
 
 onUnmounted(() => {
+  document.removeEventListener('visibilitychange', onVisibilityChange)
   reconnectEnabled = false
+  pendingDevicesReload = false
   rejectPendingWsRequests('页面已关闭')
   cleanupWebSocket()
 })
@@ -455,13 +586,13 @@ onUnmounted(() => {
   width: 100%;
 }
 
-/* Content */
+
 .content {
   max-width: 1400px;
   margin: 0 auto;
 }
 
-/* Stats */
+
 .stats {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -509,7 +640,7 @@ onUnmounted(() => {
   color: #909399;
 }
 
-/* Device Section */
+
 .device-section {
   background: white;
   border-radius: 10px;
@@ -519,9 +650,28 @@ onUnmounted(() => {
 
 .section-header {
   display: flex;
-  justify-content: flex-start;
+  justify-content: space-between;
   align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
   margin-bottom: 16px;
+}
+
+.section-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.selected-hint {
+  font-size: 13px;
+  color: #606266;
+}
+
+.col-head-tip {
+  cursor: help;
+  border-bottom: 1px dotted var(--el-border-color);
 }
 
 .section-header h2 {
@@ -531,7 +681,7 @@ onUnmounted(() => {
   color: #303133;
 }
 
-/* Desktop Table */
+
 .desktop-table {
   display: block;
 }
@@ -563,7 +713,7 @@ onUnmounted(() => {
   justify-content: flex-end;
 }
 
-/* Mobile List */
+
 .mobile-list {
   display: none;
 }
@@ -601,11 +751,21 @@ onUnmounted(() => {
   margin-bottom: 12px;
 }
 
+.card-select {
+  flex-shrink: 0;
+  margin-top: 4px;
+}
+
 .card-header .device-id {
   flex: 1;
+  min-width: 0;
   word-break: break-all;
   display: block;
   padding: 6px 8px;
+}
+
+.card-header .el-tag {
+  flex-shrink: 0;
 }
 
 .card-body {
@@ -646,7 +806,7 @@ onUnmounted(() => {
   flex: 1;
 }
 
-/* Responsive */
+
 @media (max-width: 768px) {
   .desktop-table {
     display: none !important;
@@ -715,5 +875,20 @@ onUnmounted(() => {
   .card-footer .el-button {
     flex: 1 1 calc(50% - 4px);
   }
+}
+
+.device-info-json {
+  margin: 0;
+  padding: 12px;
+  font-size: 12px;
+  line-height: 1.45;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: min(70vh, 520px);
+  overflow: auto;
+  background: var(--el-fill-color-light);
+  border-radius: 4px;
+  border: 1px solid var(--el-border-color-lighter);
 }
 </style>

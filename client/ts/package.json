@@ -33,19 +33,19 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
     "dev": "tsx example.ts",
+    "build:example": "tsc -p tsconfig.example.json",
+    "example:run": "pnpm run build:example && node dist-standalone/example.js",
     "prepack": "npm run clean && npm run build"
   },
   "license": "MIT",
   "publishConfig": {
     "access": "public"
   },
-  "dependencies": {
-    "node-machine-id": "^1.1.12"
-  },
+  "dependencies": {},
   "devDependencies": {
     "@types/node": "^22.0.0",
     "tsx": "^4.21.0",

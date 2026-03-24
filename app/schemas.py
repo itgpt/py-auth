@@ -1,34 +1,40 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from datetime import datetime
 from typing import Optional, Dict, Any
 
 class EncryptedRequest(BaseModel):
     """加密的请求数据"""
-    encrypted_data: str  # AES加密后的base64字符串
+    encrypted_data: str                    
 
 class DeviceAuthRequest(BaseModel):
     """设备授权请求（检查/注册共用）"""
     device_id: str
-    software_name: Optional[str] = None  # 软件名
-    device_info: Optional[Dict[str, Any]] = None  # 设备信息（JSON格式，包含hostname等）
+    software_name: Optional[str] = None       
+    device_info: Optional[Dict[str, Any]] = None                                                                                             
 
 class DeviceResponse(BaseModel):
     id: int
     device_id: str
-    software_name: Optional[str]  # 软件名
-    device_info: Optional[Dict[str, Any]]  # 设备信息（JSON格式，包含hostname等）
+    software_name: Optional[str]       
+    device_info: Optional[Dict[str, Any]]                                      
     remark: Optional[str]
     is_authorized: bool
-    created_at: datetime
-    updated_at: Optional[datetime]
-    last_check: Optional[datetime]
-    
+    created_at: datetime = Field(description="注册时间：设备首次请求后不变")
+    updated_at: Optional[datetime] = Field(
+        default=None,
+        description="管理变更追踪：管理员改授权/备注或设备信息（software_name、device_info）变更时刷新",
+    )
+    last_check: Optional[datetime] = Field(
+        default=None,
+        description="活跃度：每次成功心跳/授权校验时刷新",
+    )
+
     class Config:
         from_attributes = True
 
 class EncryptedResponse(BaseModel):
     """加密的响应数据"""
-    encrypted_data: str  # AES加密后的base64字符串
+    encrypted_data: str                    
 
 class UserCreate(BaseModel):
     username: str

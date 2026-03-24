@@ -10,7 +10,7 @@
         class="menu"
         router
       >
-        <el-menu-item index="/">
+        <el-menu-item index="/devices">
           <el-icon><Box /></el-icon>
           <span>设备管理</span>
         </el-menu-item>
@@ -60,7 +60,7 @@
       </el-main>
     </el-container>
 
-    <!-- 修改密码弹窗 (全局) -->
+    
     <el-dialog v-model="showPasswordDialog" title="修改密码" width="400px">
       <el-form ref="passwordFormRef" :model="passwordForm" :rules="passwordRules" label-width="80px">
         <el-form-item label="旧密码" prop="oldPassword">
@@ -85,7 +85,7 @@
 import { ref, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Lock, Box, User, Setting, Document, ArrowDown, Reading } from '@element-plus/icons-vue'
-import { api } from '../api'
+import { api, isSessionExpiredError } from '../api'
 import { ElMessage } from 'element-plus'
 
 const route = useRoute()
@@ -95,7 +95,7 @@ const username = ref(localStorage.getItem('username') || 'Admin')
 const activeMenu = computed(() => route.path)
 const pageTitle = computed(() => {
   const titles = {
-    '/': '设备管理',
+    '/devices': '设备管理',
     '/users': '用户管理',
     '/settings': '系统配置',
     '/logs': '审计日志',
@@ -134,6 +134,10 @@ const handleChangePassword = async () => {
     ElMessage.success('密码修改成功')
     showPasswordDialog.value = false
   } catch (e) {
+    if (isSessionExpiredError(e)) {
+      showPasswordDialog.value = false
+      return
+    }
     ElMessage.error(e.message || '修改失败')
   } finally {
     changingPassword.value = false

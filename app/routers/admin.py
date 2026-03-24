@@ -8,6 +8,9 @@ from app.schemas import (
     UserResponse, UserCreate, UserUpdate, OperationLogResponse, OperationLogListResponse
 )
 from app.auth import get_current_user, get_password_hash
+from app.audit import add_operation_log
+from app.coerce import coerce_boolish
+from app.deps import require_admin
 import logging
 
 logger = logging.getLogger(__name__)
@@ -17,40 +20,15 @@ DEFAULT_CONFIGS = {
     "default_authorization": True
 }
 
-
-def _parse_default_authorization(value):
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.strip().lower() in ("1", "true", "yes", "on")
-    return bool(value)
-
-
-def _add_operation_log(
-    db: Session,
-    username: str,
-    action: str,
-    target_type: str,
-    target_id: str | None = None,
-    detail: dict | None = None
-):
-    db.add(OperationLog(
-        username=username,
-        action=action,
-        target_type=target_type,
-        target_id=target_id,
-        detail=detail
-    ))
-
 @router.get("/config")
 async def get_configs(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    _: User = Depends(get_current_user),
 ):
     config = db.query(Config).filter(Config.key == "default_authorization").first()
     if not config:
         return DEFAULT_CONFIGS.copy()
-    return {"default_authorization": _parse_default_authorization(config.value)}
+    return {"default_authorization": coerce_boolish(config.value)}
 
 @router.put("/config")
 async def update_configs(
@@ -64,7 +42,7 @@ async def update_configs(
         if key not in allowed_keys:
             continue
         if key == "default_authorization":
-            normalized[key] = _parse_default_authorization(value)
+            normalized[key] = coerce_boolish(value)
 
     for key, value in normalized.items():
         config = db.query(Config).filter(Config.key == key).first()
@@ -74,7 +52,7 @@ async def update_configs(
             new_config = Config(key=key, value=value)
             db.add(new_config)
 
-    _add_operation_log(
+    add_operation_log(
         db,
         username=current_user.username,
         action="update_config",
@@ -93,16 +71,11 @@ async def update_configs(
     return {"message": "配置已更新"}
 
 
-def check_admin(current_user: User):
-    if not current_user.is_admin:
-        raise HTTPException(status_code=403, detail="没有权限")
-
 @router.get("/users", response_model=list[UserResponse])
 async def get_users(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    _: User = Depends(require_admin),
 ):
-    check_admin(current_user)
     return db.query(User).all()
 
 
@@ -111,9 +84,8 @@ async def get_operation_logs(
     page: int = 1,
     page_size: int = 50,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_admin)
 ):
-    check_admin(current_user)
     page = max(1, int(page))
     page_size = max(1, min(200, int(page_size)))
     query = db.query(OperationLog)
@@ -135,9 +107,8 @@ async def get_operation_logs(
 async def cleanup_operation_logs(
     days: int = Query(..., ge=0, description="清理天数，0 表示全部清空"),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_admin)
 ):
-    check_admin(current_user)
     if days <= 0:
         deleted_count = db.query(OperationLog).delete()
         mode = "all"
@@ -150,7 +121,7 @@ async def cleanup_operation_logs(
         )
         mode = "older_than_days"
 
-    _add_operation_log(
+    add_operation_log(
         db,
         username=current_user.username,
         action="cleanup_logs",
@@ -173,9 +144,8 @@ async def cleanup_operation_logs(
 async def create_user(
     user_data: UserCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_admin)
 ):
-    check_admin(current_user)
     if db.query(User).filter(User.username == user_data.username).first():
         raise HTTPException(status_code=400, detail="用户名已存在")
     
@@ -186,7 +156,7 @@ async def create_user(
         is_active=user_data.is_active
     )
     db.add(new_user)
-    _add_operation_log(
+    add_operation_log(
         db,
         username=current_user.username,
         action="create_user",
@@ -203,9 +173,8 @@ async def update_user(
     user_id: int,
     user_data: UserUpdate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_admin)
 ):
-    check_admin(current_user)
     db_user = db.query(User).filter(User.id == user_id).first()
     if not db_user:
         raise HTTPException(status_code=404, detail="用户不存在")
@@ -215,7 +184,7 @@ async def update_user(
     
     for key, value in user_data.model_dump(exclude_unset=True, exclude={'password'}).items():
         setattr(db_user, key, value)
-    _add_operation_log(
+    add_operation_log(
         db,
         username=current_user.username,
         action="update_user",
@@ -234,9 +203,8 @@ async def update_user(
 async def delete_user(
     user_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_admin)
 ):
-    check_admin(current_user)
     if current_user.id == user_id:
         raise HTTPException(status_code=400, detail="不能删除自己")
     
@@ -246,7 +214,7 @@ async def delete_user(
     
     username = db_user.username
     db.delete(db_user)
-    _add_operation_log(
+    add_operation_log(
         db,
         username=current_user.username,
         action="delete_user",

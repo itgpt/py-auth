@@ -13,8 +13,8 @@ def setup_cors(app):
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[
-            "http://localhost:3000",  # Vite开发服务器
-            "http://localhost:5173",  # Vite默认端口
+            "http://localhost:3000",             
+            "http://localhost:5173",            
             "http://127.0.0.1:3000",
             "http://127.0.0.1:5173",
         ],

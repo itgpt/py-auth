@@ -11,6 +11,7 @@ const routes = [
   {
     path: '/login',
     name: 'Login',
+    meta: { title: '登录' },
     component: LoginForm,
   },
   {
@@ -20,27 +21,36 @@ const routes = [
     children: [
       {
         path: '',
+        redirect: '/devices',
+      },
+      {
+        path: 'devices',
         name: 'Dashboard',
+        meta: { title: '设备管理' },
         component: AdminPanel,
       },
       {
         path: 'settings',
         name: 'Settings',
+        meta: { title: '系统配置' },
         component: Settings,
       },
       {
         path: 'users',
         name: 'Users',
+        meta: { title: '用户管理' },
         component: Users,
       },
       {
         path: 'logs',
         name: 'AuditLogs',
+        meta: { title: '审计日志' },
         component: AuditLogs,
       },
       {
         path: 'docs',
         name: 'Docs',
+        meta: { title: '使用文档' },
         component: Docs,
       }
     ]
@@ -49,7 +59,10 @@ const routes = [
 
 const router = createRouter({
   history: createWebHistory(),
-  routes
+  routes,
+  scrollBehavior() {
+    return { top: 0 }
+  },
 })
 
 router.beforeEach((to) => {
@@ -64,6 +77,13 @@ router.beforeEach((to) => {
   }
 
   return true
+})
+
+const appTitle = '授权管理面板'
+router.afterEach((to) => {
+  const leaf = [...to.matched].reverse().find((r) => r.meta?.title)
+  const section = leaf?.meta?.title
+  document.title = section ? `${section} · ${appTitle}` : appTitle
 })
 
 export default router

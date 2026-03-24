@@ -1,28 +1,39 @@
-"""
-授权客户端使用示例
+import json
+from pathlib import Path
+from typing import Optional
 
-缓存策略：
-- 始终向服务端发送请求并更新本地缓存
-- 缓存有效期7天
-- 网络失败时，在有效期内使用缓存作为后备
-"""
+
 from py_auth_client import AuthClient, AuthorizationError
 
-client = AuthClient(
-    server_url="http://localhost:8000",
-    software_name="我的软件",
-    software_version="0.0.1",
-    client_secret="aB3cD5eF7gH9iJ1kL3mN5oP7qR9sT1uV3wX5yZ7aB9cD1eF3gH5iJ7kL9mN1oP3qR5sT7uV9wX1yZ3",
-    # debug=True  # 开启调试日志，便于排查网络/缓存状态
-)
 
-# 检查授权
-try:
-    client.require_authorization()
-    print("✅ 设备已授权")
-except AuthorizationError as e:
-    print(f"❌ 授权失败: {e}")
-    exit(1)
+def _client_secret() -> Optional[str]:
+    text = (Path(__file__).resolve().parent.parent.parent / ".env").read_text(encoding="utf-8")
+    for line in text.splitlines():
+        s = line.strip()
+        if not s or s.startswith("#") or "=" not in s:
+            continue
+        key, _, val = s.partition("=")
+        if key.strip() == "CLIENT_SECRET":
+            return val.strip().strip('"').strip("'") or None
+    return None
 
-print(client.get_authorization_info())
-# 你的软件代码...
+
+def main() -> None:
+    client = AuthClient(
+        server_url="http://localhost:8000",
+        software_name="软件python示例",
+        software_version="0.0.1",
+        client_secret=_client_secret(),
+        debug=True,
+    )
+    try:
+        client.require_authorization()
+    except AuthorizationError as e:
+        print(f"授权失败: {e}")
+    info = client.get_authorization_info()
+    if not client.debug:
+        print(json.dumps(info, ensure_ascii=False, indent=2))
+
+
+if __name__ == "__main__":
+    main()

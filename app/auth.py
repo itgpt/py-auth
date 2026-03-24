@@ -19,14 +19,14 @@ import hashlib
 
 logger = logging.getLogger(__name__)
 
-# 配置
+    
 SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-in-production-12345678")
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "1440"))  # 默认24小时
-# 客户端共享密钥（用于AES加密解密）
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "1440"))          
+                    
 CLIENT_SECRET = os.getenv("CLIENT_SECRET", "")
 
-# AES加密密钥（基于CLIENT_SECRET）
+                          
 _cipher = None
 
 def _get_cipher() -> Optional[Fernet]:
@@ -34,7 +34,7 @@ def _get_cipher() -> Optional[Fernet]:
     global _cipher
     if _cipher is None and CLIENT_SECRET:
         try:
-            # 直接使用CLIENT_SECRET的SHA256哈希作为密钥
+                                            
             key_bytes = hashlib.sha256(CLIENT_SECRET.encode('utf-8')).digest()
             key = base64.urlsafe_b64encode(key_bytes)
             _cipher = Fernet(key)
@@ -66,10 +66,10 @@ def encrypt_response_data(data: Dict[str, Any]) -> Optional[str]:
         logger.error(f"加密失败: {e}")
         return None
 
-# 密码加密 - 使用 sha256_crypt 避免 bcrypt 兼容性问题
+                                        
 pwd_context = CryptContext(schemes=["sha256_crypt"], deprecated="auto")
 
-# Bearer认证
+          
 security = HTTPBearer(auto_error=False)
 
 
@@ -199,7 +199,7 @@ def init_admin_user(db: Session):
     admin_username = os.getenv("ADMIN_USERNAME", "admin")
     admin_password = os.getenv("ADMIN_PASSWORD", "admin123")
     
-    # 检查是否已存在管理员
+                
     existing_admin = db.query(User).filter(User.username == admin_username).first()
     if not existing_admin:
         create_user(db, admin_username, admin_password, is_admin=True)

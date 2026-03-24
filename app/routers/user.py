@@ -2,7 +2,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from datetime import timedelta
 from app.database import get_db
-from app.models import User, OperationLog
+from app.models import User
+from app.audit import add_operation_log
 from app.schemas import UserCreate, UserLogin, UserResponse, TokenResponse, ChangePasswordRequest
 from app.auth import (
     authenticate_user, 
@@ -78,13 +79,14 @@ async def change_password(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="新密码不能与旧密码相同")
     
     current_user.password_hash = get_password_hash(password_data.new_password)
-    db.add(OperationLog(
+    add_operation_log(
+        db,
         username=current_user.username,
         action="change_password",
         target_type="user",
         target_id=current_user.username,
-        detail=None
-    ))
+        detail=None,
+    )
     db.commit()
     db.refresh(current_user)
     return {"message": "密码更改成功"}

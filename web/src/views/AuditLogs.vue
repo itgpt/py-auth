@@ -44,11 +44,8 @@
 
 <script setup>
 import { ref, onMounted } from 'vue'
-import { ElMessage } from 'element-plus'
 import { api } from '../api'
-import { useRouter } from 'vue-router'
-
-const router = useRouter()
+import { reportApiError } from '../utils/errorFeedback'
 
 const logs = ref([])
 const loading = ref(false)
@@ -81,12 +78,7 @@ const fetchLogs = async () => {
     total.value = Number(data?.total || 0)
     logs.value = Array.isArray(data?.logs) ? data.logs : []
   } catch (e) {
-    if (e.message.includes('登录已过期')) {
-      api.logout()
-      await router.push('/login')
-    } else {
-      ElMessage.error(e.message || '加载审计日志失败')
-    }
+    if (reportApiError(e, '加载审计日志失败')) return
   } finally {
     loading.value = false
   }

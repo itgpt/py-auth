@@ -1,32 +1,51 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
 
 	authclient "github.com/Paper-Dragon/py-auth/client/go"
 )
 
+func clientSecret() string {
+	_, file, _, _ := runtime.Caller(0)
+	data, _ := os.ReadFile(filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", "..", ".env")))
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, val, _ := strings.Cut(line, "=")
+		if strings.TrimSpace(key) != "CLIENT_SECRET" {
+			continue
+		}
+		return strings.Trim(strings.TrimSpace(val), `"'`)
+	}
+	return ""
+}
+
 func main() {
-	// 初始化客户端
-	client, err := authclient.NewAuthClient(authclient.AuthClientConfig{
+	cfg := authclient.AuthClientConfig{
 		ServerURL:         "http://localhost:8000",
-		SoftwareName:      "我的软件",
+		SoftwareName:      "软件go示例",
 		SoftwareVersion:   "0.0.1",
-		ClientSecret:      "your-client-secret-key-change-in-production",
-		EnableCache:       true,
+		ClientSecret:      clientSecret(),
 		CacheValidityDays: 7,
 		CheckIntervalDays: 2,
-		Debug:             true, // 开启调试日志
-	})
+		Debug:             true,
+	}
+	client, err := authclient.NewAuthClient(cfg)
 
 	if err != nil {
 		log.Fatalf("初始化客户端失败: %v", err)
 	}
 
-	// 检查授权
-	err = client.RequireAuthorization()
+	err = client.RequireAuthorization(false)
 	if err != nil {
 		if authErr, ok := err.(*authclient.AuthorizationError); ok {
 			fmt.Printf("❌ 授权失败: %s\n", authErr.Message)
@@ -46,9 +65,10 @@ func main() {
 
 	fmt.Println("✅ 设备已授权")
 
-	// 获取授权信息
 	info := client.GetAuthorizationInfo()
-	fmt.Printf("授权信息: %+v\n", info)
-
-	// 你的软件代码...
+	if !cfg.Debug {
+		if b, err := json.MarshalIndent(info, "", "  "); err == nil {
+			fmt.Println(string(b))
+		}
+	}
 }

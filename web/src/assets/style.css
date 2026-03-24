@@ -22,7 +22,7 @@ body {
   width: 100%;
 }
 
-/* Element Plus 优化 */
+
 .el-button {
   border-radius: 6px;
   font-weight: 500;
@@ -45,7 +45,7 @@ body {
   border-radius: 12px;
 }
 
-/* 滚动条 */
+
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -60,7 +60,7 @@ body {
   background: #bbb;
 }
 
-/* 移动端优化 */
+
 @media (max-width: 768px) {
   * {
     -webkit-tap-highlight-color: transparent;

@@ -3,14 +3,14 @@
     "target": "ES2022",
     "module": "CommonJS",
     "moduleResolution": "Node",
-    "declaration": true,
-    "outDir": "dist",
-    "rootDir": "src",
     "strict": true,
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
-    "types": ["node"]
+    "types": ["node"],
+    "noEmit": true,
+    "declaration": false,
+    "rootDir": "."
   },
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*.ts", "example.ts"]
 }

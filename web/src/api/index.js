@@ -1,5 +1,29 @@
 const API_BASE = '/api'
 
+
+export const SESSION_EXPIRED_MESSAGE = '登录已过期，请重新登录'
+
+let onSessionExpired = null
+
+
+export function configureSessionExpired(handler) {
+  onSessionExpired = handler
+}
+
+export function notifySessionExpired() {
+  api.setToken(null)
+  try {
+    localStorage.removeItem('username')
+  } catch (_) {
+  }
+  onSessionExpired?.()
+}
+
+export function isSessionExpiredError(err) {
+  const m = err?.message
+  return typeof m === 'string' && m.includes('登录已过期')
+}
+
 class ApiService {
   constructor() {
     this.token = localStorage.getItem('authToken')
@@ -35,8 +59,8 @@ class ApiService {
     })
 
     if (response.status === 401) {
-      this.setToken(null)
-      throw new Error('登录已过期，请重新登录')
+      notifySessionExpired()
+      throw new Error(SESSION_EXPIRED_MESSAGE)
     }
 
     if (!response.ok) {
@@ -45,7 +69,6 @@ class ApiService {
         const errorData = await response.json()
         errorMessage = errorData.detail || errorData.message || errorMessage
       } catch (e) {
-        // ignore
       }
       throw new Error(errorMessage)
     }
@@ -56,11 +79,11 @@ class ApiService {
     return response.json()
   }
 
-  // 用户认证
+  
   async login(username, password) {
-    // 登录前清除旧 token，避免发送无效 token 导致 401
-    this.setToken(null)
     
+    this.setToken(null)
+
     const data = await this.request('/user/login', {
       method: 'POST',
       body: JSON.stringify({ username, password })
@@ -92,7 +115,7 @@ class ApiService {
     this.setToken(null)
   }
 
-  // 配置管理
+  
   async getConfigs() {
     return this.request('/admin/config')
   }
@@ -117,7 +140,7 @@ class ApiService {
     })
   }
 
-  // 用户管理
+  
   async getUsers() {
     return this.request('/admin/users')
   }
@@ -148,4 +171,3 @@ class ApiService {
 }
 
 export const api = new ApiService()
-

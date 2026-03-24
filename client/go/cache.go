@@ -1,305 +1,291 @@
 package authclient
 
 import (
-	"bytes"
-	"compress/zlib"
-	"crypto/md5"
-	"crypto/sha256"
-	"encoding/binary"
 	"encoding/json"
-	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
-	"strconv"
-	"strings"
 	"time"
 )
 
-// CacheData 缓存数据结构（与Python版本兼容）
 type CacheData struct {
-	Authorized bool    `json:"a"` // authorized
-	Message    string  `json:"m"` // message
-	CachedAt   float64 `json:"c"` // cached_at
-	LastCheck  float64 `json:"l"` // last_check
-	Version    int     `json:"v"` // version (干扰字段，与Python一致，必须包含)
-	Fake       string  `json:"f"` // fake (干扰字段，与Python一致，必须包含)
+	Message         string
+	LastSuccessAt   float64
+	HeartbeatTimes  int
 }
 
-// AuthCache 授权缓存管理
 type AuthCache struct {
 	cacheDir             string
 	cacheFile            string
 	deviceID             string
 	serverURL            string
 	softwareName         string
-	encryptKey           []byte
 	cacheValidityDays    int
 	cacheValiditySeconds int64
 	checkIntervalDays    int
 	checkIntervalSeconds int64
 }
 
-// NewAuthCache 创建新的缓存管理器
 func NewAuthCache(cacheDir, deviceID, serverURL, softwareName string, cacheValidityDays, checkIntervalDays int) *AuthCache {
-	cache := &AuthCache{
+	c := &AuthCache{
 		deviceID:          deviceID,
-		serverURL:         serverURL,
+		serverURL:         NormalizeServerURL(serverURL),
 		softwareName:      softwareName,
 		cacheValidityDays: cacheValidityDays,
 		checkIntervalDays: checkIntervalDays,
 	}
-
-	cache.cacheValiditySeconds = int64(cacheValidityDays * 24 * 60 * 60)
-	cache.checkIntervalSeconds = int64(checkIntervalDays * 24 * 60 * 60)
-
-	// 确定缓存目录
-	if cacheDir != "" {
-		cache.cacheDir = cacheDir
-	} else {
-		home, _ := os.UserHomeDir()
-		switch runtime.GOOS {
-		case "windows":
-			localAppData := os.Getenv("LOCALAPPDATA")
-			if localAppData == "" {
-				localAppData = filepath.Join(home, "AppData", "Local")
-			}
-			cache.cacheDir = filepath.Join(localAppData, "Microsoft", "CLR_v4.0")
-		case "darwin":
-			cache.cacheDir = filepath.Join(home, "Library", "Caches", ".com.apple.metadata")
-		default:
-			cache.cacheDir = filepath.Join(home, ".cache", ".fontconfig")
-		}
+	if c.cacheValidityDays <= 0 {
+		c.cacheValidityDays = 7
+	}
+	if c.checkIntervalDays <= 0 {
+		c.checkIntervalDays = 2
 	}
 
-	os.MkdirAll(cache.cacheDir, 0755)
+	c.cacheValiditySeconds = int64(c.cacheValidityDays * 24 * 60 * 60)
+	c.checkIntervalSeconds = int64(c.checkIntervalDays * 24 * 60 * 60)
 
-	// 生成缓存文件名
-	cacheKey := fmt.Sprintf("%s:%s", deviceID, softwareName)
-	hash := md5.Sum([]byte(cacheKey))
-	cacheFilename := fmt.Sprintf("runtime_%s.dat", fmt.Sprintf("%x", hash)[:12])
-	cache.cacheFile = filepath.Join(cache.cacheDir, cacheFilename)
-
-	// 生成加密密钥
-	encryptMaterial := fmt.Sprintf("%s:%s:%s:obfuscate_v1", serverURL, deviceID, softwareName)
-	hash256 := sha256.Sum256([]byte(encryptMaterial))
-	cache.encryptKey = hash256[:]
-
-	return cache
+	if cacheDir == "" {
+		cacheDir = DefaultClientStorageRoot()
+	}
+	c.cacheDir = cacheDir
+	_ = os.MkdirAll(c.cacheDir, 0o755)
+	c.cacheFile = BundlePath(c.serverURL, c.cacheDir)
+	return c
 }
 
-// obfuscate 混淆数据
-func (c *AuthCache) obfuscate(data []byte) ([]byte, error) {
-	// 1. 压缩数据
-	var compressed bytes.Buffer
-	w := zlib.NewWriter(&compressed)
-	if _, err := w.Write(data); err != nil {
+func intFromJSON(v interface{}) (int, bool) {
+	switch x := v.(type) {
+	case float64:
+		if x >= 0 {
+			return int(x), true
+		}
+		return 0, false
+	case int:
+		return x, true
+	case int64:
+		return int(x), true
+	default:
+		return 0, false
+	}
+}
+
+func (c *AuthCache) snapshotAuthRow() (*CacheData, int) {
+	m, _ := ReadStateDict(c.serverURL, c.cacheDir)
+	if m == nil {
+		return nil, 0
+	}
+	row := loadAppsMap(m)[c.softwareName]
+	if row == nil {
+		return nil, 0
+	}
+	if _, ok := rowLastSuccessUnix(row); !ok {
+		return nil, 0
+	}
+	n, ok := intFromJSON(row["heartbeat_times"])
+	if !ok || n < 1 {
+		_ = c.ClearCache()
+		return nil, 0
+	}
+	cd := stateMapToCacheData(row)
+	if cd == nil {
+		return nil, 0
+	}
+	return cd, n
+}
+
+func (c *AuthCache) StoredHeartbeatTimes() int {
+	_, n := c.snapshotAuthRow()
+	return n
+}
+
+func (c *AuthCache) IsCacheTTLValid(cache *CacheData) bool {
+	if cache == nil || cache.LastSuccessAt <= 0 {
+		return false
+	}
+	now := float64(time.Now().UnixNano()) / 1e9
+	return (now-cache.LastSuccessAt) < float64(c.cacheValiditySeconds)
+}
+
+func stateMapToCacheData(m map[string]interface{}) *CacheData {
+	if m == nil {
+		return nil
+	}
+	ts, ok := rowLastSuccessUnix(m)
+	if !ok {
+		return nil
+	}
+	cd := &CacheData{
+		Message:       "设备已授权",
+		LastSuccessAt: ts,
+	}
+	if n, ok := intFromJSON(m["heartbeat_times"]); ok && n > 0 {
+		cd.HeartbeatTimes = n
+	}
+	return cd
+}
+
+func (c *AuthCache) GetCache() (*CacheData, error) {
+	m, err := ReadStateDict(c.serverURL, c.cacheDir)
+	if err != nil {
 		return nil, err
 	}
-	w.Close()
-	compressedBytes := compressed.Bytes()
-
-	// 2. XOR混淆
-	key := c.encryptKey
-	keyLen := len(key)
-	xored := make([]byte, len(compressedBytes))
-	for i := range compressedBytes {
-		xored[i] = compressedBytes[i] ^ key[i%keyLen]
-	}
-
-	// 3. 添加随机前缀
-	timeSeed := time.Now().Unix() / 3600
-	prefixMaterial := fmt.Sprintf("%s:%s:%d", c.deviceID, c.softwareName, timeSeed)
-	prefixHash := md5.Sum([]byte(prefixMaterial))
-	prefixSeed := prefixHash[:4]
-
-	// 4. 打包：前缀(4) + 长度(4) + 数据
-	packed := make([]byte, 8+len(xored))
-	copy(packed[0:4], prefixSeed)
-	binary.BigEndian.PutUint32(packed[4:8], uint32(len(xored)))
-	copy(packed[8:], xored)
-
-	// 5. 再次XOR整体
-	finalKey := sha256.Sum256(append(c.encryptKey, prefixSeed...))
-	final := make([]byte, len(packed))
-	for i := range packed {
-		final[i] = packed[i] ^ finalKey[i%len(finalKey)]
-	}
-
-	return final, nil
-}
-
-// deobfuscate 解除混淆
-func (c *AuthCache) deobfuscate(data []byte) ([]byte, error) {
-	if len(data) < 8 {
-		return nil, fmt.Errorf("数据长度不足")
-	}
-
-	currentHour := time.Now().Unix() / 3600
-	maxOffset := int64(c.cacheValidityDays*24 + 12)
-
-	for hourOffset := -maxOffset; hourOffset <= maxOffset; hourOffset++ {
-		timeSeed := currentHour + hourOffset
-		prefixMaterial := fmt.Sprintf("%s:%s:%d", c.deviceID, c.softwareName, timeSeed)
-		prefixHash := md5.Sum([]byte(prefixMaterial))
-		prefixSeed := prefixHash[:4]
-
-		// 1. 解除最外层XOR
-		finalKey := sha256.Sum256(append(c.encryptKey, prefixSeed...))
-		unpacked := make([]byte, len(data))
-		for i := range data {
-			unpacked[i] = data[i] ^ finalKey[i%len(finalKey)]
-		}
-
-		// 2. 验证前缀
-		if !bytes.Equal(unpacked[0:4], prefixSeed) {
-			continue
-		}
-
-		// 3. 解包长度和数据
-		length := binary.BigEndian.Uint32(unpacked[4:8])
-		if int(length) > len(unpacked)-8 {
-			continue
-		}
-
-		xored := unpacked[8 : 8+length]
-
-		// 4. 解除XOR混淆
-		key := c.encryptKey
-		keyLen := len(key)
-		compressed := make([]byte, len(xored))
-		for i := range xored {
-			compressed[i] = xored[i] ^ key[i%keyLen]
-		}
-
-		// 5. 解压
-		r, err := zlib.NewReader(bytes.NewReader(compressed))
-		if err != nil {
-			continue
-		}
-		var original bytes.Buffer
-		_, err = original.ReadFrom(r)
-		r.Close()
-		if err != nil {
-			continue
-		}
-
-		return original.Bytes(), nil
-	}
-
-	return nil, fmt.Errorf("解密失败")
-}
-
-// GetCache 获取缓存数据
-func (c *AuthCache) GetCache() (*CacheData, error) {
-	if _, err := os.Stat(c.cacheFile); os.IsNotExist(err) {
+	if m == nil {
 		return nil, nil
 	}
-
-	encryptedData, err := os.ReadFile(c.cacheFile)
-	if err != nil {
-		return nil, err
+	row := loadAppsMap(m)[c.softwareName]
+	if row == nil {
+		return nil, nil
 	}
-
-	decrypted, err := c.deobfuscate(encryptedData)
-	if err != nil {
-		return nil, err
-	}
-
-	var cacheData CacheData
-	if err := json.Unmarshal(decrypted, &cacheData); err != nil {
-		return nil, err
-	}
-
-	return &cacheData, nil
+	return stateMapToCacheData(row), nil
 }
 
-// SaveCache 保存缓存数据（与Python版本完全一致）
-func (c *AuthCache) SaveCache(authorized bool, message string) error {
-	now := float64(time.Now().Unix())
-
-	// 生成干扰字段，与Python版本完全一致
-	// Python: hashlib.md5(str(time.time()).encode()).hexdigest()[:8]
-	// 模拟Python的str(time.time())格式：使用最短浮点数表示，但保证有小数点
-	timeStr := strconv.FormatFloat(now, 'g', -1, 64)
-	if !strings.Contains(timeStr, ".") && !strings.Contains(timeStr, "e") {
-		// 如果是整数，Python会添加.0
-		timeStr = timeStr + ".0"
-	}
-	fakeHash := md5.Sum([]byte(timeStr))
-	fakeStr := fmt.Sprintf("%x", fakeHash)[:8]
-
-	cacheData := CacheData{
-		Authorized: authorized,
-		Message:    message,
-		CachedAt:   now,
-		LastCheck:  now,
-		Version:    2,       // version (干扰)，与Python一致
-		Fake:       fakeStr, // 干扰字段，与Python一致
-	}
-
-	// 使用与Python一致的JSON序列化参数：ensure_ascii=False, separators=(',', ':')
-	jsonData, err := json.Marshal(cacheData)
-	if err != nil {
-		return err
-	}
-
-	encrypted, err := c.obfuscate(jsonData)
-	if err != nil {
-		return err
-	}
-
-	os.MkdirAll(c.cacheDir, 0755)
-
-	err = os.WriteFile(c.cacheFile, encrypted, 0644)
-	if err != nil {
-		// 尝试删除后重新创建
-		if _, statErr := os.Stat(c.cacheFile); statErr == nil {
-			os.Remove(c.cacheFile)
-			err = os.WriteFile(c.cacheFile, encrypted, 0644)
+func (c *AuthCache) writeBundleWithRetry(data map[string]interface{}) error {
+	err := WriteStateDict(c.serverURL, c.cacheDir, data)
+	if err == nil {
+		if runtime.GOOS == "windows" {
+			_ = exec.Command("attrib", "+H", c.cacheFile).Run()
 		}
-		if err != nil {
-			return err
-		}
+		return nil
 	}
-
-	// Windows下隐藏文件
 	if runtime.GOOS == "windows" {
-		// 使用attrib命令隐藏文件
-		cmd := exec.Command("attrib", "+H", c.cacheFile)
-		cmd.Run()
+		if _, statErr := os.Stat(c.cacheFile); statErr == nil {
+			_ = exec.Command("attrib", "-H", c.cacheFile).Run()
+			_ = os.Remove(c.cacheFile)
+			err = WriteStateDict(c.serverURL, c.cacheDir, data)
+			if err == nil {
+				_ = exec.Command("attrib", "+H", c.cacheFile).Run()
+			}
+		}
 	}
-
-	return nil
+	return err
 }
 
-// IsCacheValid 检查缓存是否有效
+func (c *AuthCache) LoadDeviceInfoSnapshot() (*DeviceInfo, error) {
+	m, err := ReadStateDict(c.serverURL, c.cacheDir)
+	if err != nil || m == nil {
+		return nil, err
+	}
+	row := loadAppsMap(m)[c.softwareName]
+	if row == nil {
+		return nil, nil
+	}
+	var di DeviceInfo
+	switch v := row[BundleProductDeviceInfoSnapshotKey].(type) {
+	case string:
+		if v == "" {
+			return nil, nil
+		}
+		if err := json.Unmarshal([]byte(v), &di); err != nil {
+			return nil, err
+		}
+		return &di, nil
+	case map[string]interface{}:
+		b, err := json.Marshal(v)
+		if err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(b, &di); err != nil {
+			return nil, err
+		}
+		return &di, nil
+	default:
+		return nil, nil
+	}
+}
+
+func (c *AuthCache) SaveCache(authorized bool, _ string, nextHeartbeat *int, snapshot *DeviceInfo) error {
+	m, _ := ReadStateDict(c.serverURL, c.cacheDir)
+	if m == nil {
+		m = make(map[string]interface{})
+	}
+	for _, k := range bundleRootStrayKeys {
+		delete(m, k)
+	}
+	now := float64(time.Now().UnixNano()) / 1e9
+
+	apps := loadAppsMap(m)
+	sub := cloneStringMap(apps[c.softwareName])
+	delete(sub, "software_name")
+	if !authorized {
+		for _, k := range bundleProductRevokeKeys {
+			delete(sub, k)
+		}
+		sub["device_id"] = c.deviceID
+	} else {
+		for _, k := range bundleProductAuthorizeStripKeys {
+			delete(sub, k)
+		}
+		sub["device_id"] = c.deviceID
+		sub["last_success_at"] = now
+		if nextHeartbeat != nil {
+			sub["heartbeat_times"] = *nextHeartbeat
+		}
+		if snapshot != nil {
+			if b, err := json.Marshal(snapshot); err == nil && len(b) > 0 {
+				var obj map[string]interface{}
+				if err := json.Unmarshal(b, &obj); err == nil && len(obj) > 0 {
+					sub[BundleProductDeviceInfoSnapshotKey] = obj
+				}
+			}
+		}
+	}
+	apps[c.softwareName] = sub
+	commitAppsMap(m, apps)
+
+	return c.writeBundleWithRetry(m)
+}
+
 func (c *AuthCache) IsCacheValid() bool {
 	cache, err := c.GetCache()
 	if err != nil || cache == nil {
 		return false
 	}
-
-	elapsed := time.Now().Unix() - int64(cache.CachedAt)
-	return elapsed < c.cacheValiditySeconds
+	return c.IsCacheTTLValid(cache)
 }
 
-// NeedsCheck 检查是否需要在线验证
 func (c *AuthCache) NeedsCheck() bool {
 	cache, err := c.GetCache()
 	if err != nil || cache == nil {
 		return true
 	}
-
-	elapsed := time.Now().Unix() - int64(cache.LastCheck)
-	return elapsed >= c.checkIntervalSeconds
+	now := float64(time.Now().UnixNano()) / 1e9
+	return (now - cache.LastSuccessAt) >= float64(c.checkIntervalSeconds)
 }
 
-// ClearCache 清除缓存
 func (c *AuthCache) ClearCache() error {
-	if _, err := os.Stat(c.cacheFile); os.IsNotExist(err) {
+	m, err := ReadStateDict(c.serverURL, c.cacheDir)
+	if err != nil {
+		return err
+	}
+	if m == nil {
 		return nil
 	}
-	return os.Remove(c.cacheFile)
+	for _, k := range bundleRootStrayKeys {
+		delete(m, k)
+	}
+	apps := loadAppsMap(m)
+	sub := cloneStringMap(apps[c.softwareName])
+	delete(sub, "software_name")
+	for _, k := range bundleProductClearRowKeys {
+		delete(sub, k)
+	}
+	sub["device_id"] = c.deviceID
+	apps[c.softwareName] = sub
+	commitAppsMap(m, apps)
+	if !anyAppMapHasDeviceID(apps) {
+		if _, statErr := os.Stat(c.cacheFile); statErr == nil {
+			_ = os.Remove(c.cacheFile)
+		}
+		return nil
+	}
+	return c.writeBundleWithRetry(m)
+}
+
+func anyAppMapHasDeviceID(apps map[string]map[string]interface{}) bool {
+	for _, row := range apps {
+		if rowDeviceIDString(row) != "" {
+			return true
+		}
+	}
+	return false
 }

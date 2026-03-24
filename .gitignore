@@ -35,6 +35,10 @@ web/dist/
 web/.pnpm-store/
 web/.pnpm-debug.log
 node_modules/
+# 任意 dist（含 client/ts/dist 编译输出；发布前在 client/ts 执行 pnpm run build）
+**/dist/
+# client/ts 示例预编译输出（pnpm example:run）
+**/dist-standalone/
 # 系统文件
 .DS_Store
 Thumbs.db

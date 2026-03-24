@@ -1,694 +1,611 @@
-"""
-Python授权客户端模块
-供其他软件使用，用于检查设备授权状态
-
-缓存机制：
-- 缓存有效期：7天
-- 始终向服务端发送请求并更新本地缓存
-- 如果在线验证失败但缓存仍在有效期内，使用缓存结果作为后备
-- 缓存文件经过混淆加密，隐藏在系统目录中
-
-网络传输：
-- 使用AES加密保护请求和响应数据
-"""
-import requests
+__version__ = '0.1.3'
+import copy
 import logging
+import threading
 import platform
 import socket
+import sys
 import hashlib
-import uuid
 import json
 import os
 import time
-import struct
-import zlib
 import base64
-from typing import Optional, Dict, Any
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
-import psutil
-from cryptography.fernet import Fernet
-import logging
+from typing import Any, Callable, Dict, Optional
+from .device_utils import _PERSISTED_DEVICE_ID_NOT_PREFETCHED, build_device_id, build_device_info, collect_device_facts, fetch_public_ip, load_persisted_device_id
+from .state_bundle import BUNDLE_PRODUCT_DEVICE_INFO_SNAPSHOT_KEY, BUNDLE_PRODUCT_REVOKE_KEYS, BUNDLE_ROOT_STRAY_KEYS, bundle_path, commit_apps_map, get_client_storage_root, load_apps_map, read_state_dict, row_device_id_str, row_last_success_ts, write_state_dict
 
-from .device_utils import (
-    build_device_id,
-    build_device_info,
-    collect_device_facts,
-)
+_SECONDS_PER_MINUTE = 60
+_SECONDS_PER_HOUR = 3600
+_SECONDS_PER_DAY = 86400
+_DEFAULT_HEARTBEAT_TIMEOUT_SEC = (0.9, 0.9)
+_ONLINE_CHECK_WALL_DEADLINE_SEC = 1.75
+_ONLINE_CHECK_WALL_MIN_WHEN_DEVICE_INFO_DEFERRED_SEC = 12.0
+_ONLINE_CHECK_FAST_WALL_SEC = 4.0
+
+def _online_check_wall_deadline_sec() -> float:
+    raw = os.environ.get('PY_AUTH_ONLINE_WALL_SEC', '').strip()
+    if raw:
+        try:
+            v = float(raw)
+            if 1.0 <= v <= 30.0:
+                return v
+        except ValueError:
+            pass
+    return _ONLINE_CHECK_WALL_DEADLINE_SEC
+
+def _online_check_effective_wall_sec(device_info_deferred: bool) -> float:
+    base = _online_check_wall_deadline_sec()
+    if not device_info_deferred:
+        return base
+    floor = float(_ONLINE_CHECK_WALL_MIN_WHEN_DEVICE_INFO_DEFERRED_SEC)
+    raw = os.environ.get('PY_AUTH_ONLINE_WALL_DEFERRED_MIN_SEC', '').strip()
+    if raw:
+        try:
+            v = float(raw)
+            if 1.0 <= v <= 60.0:
+                floor = v
+        except ValueError:
+            pass
+    return max(base, floor)
+
+
+def _device_info_lacks_nonblank_public_ip(device_info: Dict[str, Any]) -> bool:
+    nw = device_info.get('network')
+    if not isinstance(nw, dict):
+        return True
+    p = nw.get('public_ip')
+    return not (isinstance(p, str) and bool(p.strip()))
+
+
+_background_auth_executor: Optional[ThreadPoolExecutor] = None
+_background_auth_lock = threading.Lock()
+
+def get_auth_background_executor() -> ThreadPoolExecutor:
+    global _background_auth_executor
+    with _background_auth_lock:
+        if _background_auth_executor is None:
+            n = min(32, (os.cpu_count() or 2) + 4)
+            _background_auth_executor = ThreadPoolExecutor(max_workers=max(4, n), thread_name_prefix='py_auth_client')
+        return _background_auth_executor
+
+def shutdown_auth_background_executor(*, wait: bool=True, cancel_futures: bool=False) -> None:
+    global _background_auth_executor
+    with _background_auth_lock:
+        if _background_auth_executor is None:
+            return
+        try:
+            _background_auth_executor.shutdown(wait=wait, cancel_futures=cancel_futures)
+        except TypeError:
+            _background_auth_executor.shutdown(wait=wait)
+        _background_auth_executor = None
+
 
 class AuthCache:
-    """授权缓存管理（混淆加密）"""
-    
-    def __init__(
-        self, 
-        cache_dir: Optional[str] = None, 
-        device_id: str = "",
-        server_url: str = "",
-        software_name: str = "",
-        cache_validity_days: int = 7,
-        check_interval_days: int = 2
-    ):
-        """
-        初始化缓存管理器
-        
-        Args:
-            cache_dir: 缓存目录，默认使用系统隐藏目录
-            device_id: 设备ID，用于生成缓存文件名和加密密钥
-            server_url: 服务器URL，用于生成加密密钥
-            software_name: 软件名称（必填），用于区分不同软件的缓存
-            cache_validity_days: 缓存有效期（天），默认7天
-            check_interval_days: 检查间隔（天），默认2天
-        """
+
+    def __init__(self, storage_base: Path, device_id: str='', server_url: str='', software_name: str='', cache_validity_days: int=7, check_interval_days: int=2):
         self.cache_validity_days = cache_validity_days
-        self.cache_validity_seconds = cache_validity_days * 24 * 60 * 60
+        self.cache_validity_seconds = cache_validity_days * _SECONDS_PER_DAY
         self.check_interval_days = check_interval_days
-        self.check_interval_seconds = check_interval_days * 24 * 60 * 60
+        self.check_interval_seconds = check_interval_days * _SECONDS_PER_DAY
         self.device_id = device_id
-        self.software_name = software_name
-        
-        if cache_dir:
-            self.cache_dir = Path(cache_dir)
-        else:
-            system = platform.system()
-            home = Path.home()
-            windows_base = Path(os.environ.get('LOCALAPPDATA', home / 'AppData' / 'Local'))
-            self.cache_dir = {
-                'Windows': windows_base / "Microsoft/CLR_v4.0",
-                'Darwin': Path(f"{home}/Library/Caches/.com.apple.metadata"),
-            }.get(system, Path(f"{home}/.cache/.fontconfig"))
-        
+        self.server_url = (server_url or '').rstrip('/')
+        self._software_name = software_name
+        self.logger = logging.getLogger('py_auth_client')
+        self.cache_dir = storage_base
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        
-        # 生成看起来像系统文件的文件名（基于 device_id + software_name，确保不同软件使用不同缓存）
-        cache_key = f"{device_id}:{self.software_name}"
-        file_hash = hashlib.md5(cache_key.encode()).hexdigest()[:12]
-        cache_filename = f"runtime_{file_hash}.dat"
-        self.cache_filename = cache_filename
-        self.cache_file = self.cache_dir / cache_filename
-        
-        # 生成加密密钥（基于设备ID、软件名称和服务器URL）
-        encrypt_material = f"{server_url}:{device_id}:{self.software_name}:obfuscate_v1"
-        self.encrypt_key = hashlib.sha256(encrypt_material.encode()).digest()
-        self.logger = logging.getLogger("py_auth_client")
-    
-    def _obfuscate(self, data: bytes) -> bytes:
-        """
-        混淆数据（XOR加密 + 压缩 + Base64变种）
-        
-        Args:
-            data: 原始数据
-            
-        Returns:
-            混淆后的数据
-        """
-        # 1. 压缩数据
-        compressed = zlib.compress(data, level=9)
-        
-        # 2. XOR混淆
-        key = self.encrypt_key
-        key_len = len(key)
-        xored = bytes([compressed[i] ^ key[i % key_len] for i in range(len(compressed))])
-        
-        # 3. 添加随机前缀（基于时间的伪随机，但可重复）
-        time_seed = int(time.time()) // 3600  # 每小时变化
-        prefix_seed = hashlib.md5(f"{self.device_id}:{self.software_name}:{time_seed}".encode()).digest()[:4]
-        
-        # 4. 打包：前缀(4) + 长度(4) + 数据
-        packed = prefix_seed + struct.pack('>I', len(xored)) + xored
-        
-        # 5. 再次XOR整体
-        final_key = hashlib.sha256(self.encrypt_key + prefix_seed).digest()
-        final = bytes([packed[i] ^ final_key[i % len(final_key)] for i in range(len(packed))])
-        
-        return final
-    
-    def _deobfuscate(self, data: bytes) -> Optional[bytes]:
-        """
-        解除混淆
-        
-        Args:
-            data: 混淆后的数据
-            
-        Returns:
-            原始数据或None（如果解密失败）
-        """
-        try:
-            if len(data) < 8:
-                return None
-            
-            # 尝试多个可能的time_seed（允许小时偏差）
-            current_hour = int(time.time()) // 3600
-            # 允许更宽的偏移（覆盖完整缓存有效期），避免超过2小时后无法解密
-            max_offset = max(2, self.cache_validity_days * 24 + 12)  # 7天≈168小时
-            for hour_offset in range(-max_offset, max_offset + 1):
-                time_seed = current_hour + hour_offset
-                prefix_seed = hashlib.md5(f"{self.device_id}:{self.software_name}:{time_seed}".encode()).digest()[:4]
-                
-                # 1. 解除最外层XOR
-                final_key = hashlib.sha256(self.encrypt_key + prefix_seed).digest()
-                unpacked = bytes([data[i] ^ final_key[i % len(final_key)] for i in range(len(data))])
-                
-                # 2. 验证前缀
-                if unpacked[:4] != prefix_seed:
-                    continue
-                
-                # 3. 解包长度和数据
-                length = struct.unpack('>I', unpacked[4:8])[0]
-                if length > len(unpacked) - 8:
-                    continue
-                
-                xored = unpacked[8:8+length]
-                
-                # 4. 解除XOR混淆
-                key = self.encrypt_key
-                key_len = len(key)
-                compressed = bytes([xored[i] ^ key[i % key_len] for i in range(len(xored))])
-                
-                # 5. 解压
-                try:
-                    original = zlib.decompress(compressed)
-                    return original
-                except:
-                    continue
-            
-            return None
-        except Exception:
-            try:
-                self.logger.debug("缓存解密失败")
-            except Exception:
-                pass
-            return None
-    
-    def get_cache(self) -> Optional[Dict[str, Any]]:
-        """
-        获取缓存数据
-        
-        Returns:
-            缓存数据或None（如果缓存不存在或无法读取）
-        """
-        try:
-            if not self.cache_file.exists():
-                return None
-            
-            with open(self.cache_file, 'rb') as f:
-                encrypted_data = f.read()
-            
-            try:
-                self.logger.debug(f"缓存文件: {self.cache_file} 大小: {len(encrypted_data)} bytes")
-            except Exception:
-                pass
-            
-            decrypted = self._deobfuscate(encrypted_data)
-            if not decrypted:
-                try:
-                    self.logger.debug("缓存解密结果为空")
-                except Exception:
-                    pass
-                return None
-            
-            cache_data = json.loads(decrypted.decode('utf-8'))
-            
-            return {
-                'authorized': cache_data.get('a'),
-                'message': cache_data.get('m'),
-                'cached_at': cache_data.get('c'),
-                'last_check': cache_data.get('l')
-            }
-        except Exception as e:
-            try:
-                self.logger.debug(f"读取缓存异常: {e}")
-            except Exception:
-                pass
-            return None
-    
-    def save_cache(
-        self, 
-        authorized: bool, 
-        message: str,
-        *,
-        cached_at: Optional[float] = None,
-        last_check: Optional[float] = None
-    ) -> bool:
-        """
-        保存缓存数据（混淆加密）
-        
-        Args:
-            authorized: 授权状态
-            message: 消息
-            
-        Returns:
-            是否保存成功
-        """
-        try:
-            now = time.time()
-            cached_ts = cached_at if cached_at is not None else now
-            last_check_ts = last_check if last_check is not None else now
-            
-            # 使用简短的键名减少特征
-            cache_data = {
-                'a': authorized,      # authorized
-                'm': message,         # message
-                'c': cached_ts,       # cached_at
-                'l': last_check_ts,   # last_check
-                # 添加一些干扰数据
-                'v': 2,               # version (干扰)
-                'f': hashlib.md5(str(time.time()).encode()).hexdigest()[:8]  # 干扰
-            }
-            
-            json_data = json.dumps(cache_data, ensure_ascii=False, separators=(',', ':'))
-            
-            encrypted = self._obfuscate(json_data.encode('utf-8'))
-            
-            self.cache_dir.mkdir(parents=True, exist_ok=True)
-            
-            try:
-                with open(self.cache_file, 'wb') as f:
-                    f.write(encrypted)
-            except (PermissionError, OSError) as e:
-                try:
-                    self.logger.debug(f"写入缓存失败，尝试删除后重新创建: {e}")
-                    if self.cache_file.exists():
-                        # 尝试移除只读属性（Windows）
-                        if platform.system() == 'Windows':
-                            try:
-                                import ctypes
-                                ctypes.windll.kernel32.SetFileAttributesW(str(self.cache_file), 0x80)  # NORMAL
-                            except:
-                                pass
-                        self.cache_file.unlink()
-                        self.logger.debug("已删除旧缓存文件")
-                    with open(self.cache_file, 'wb') as f:
-                        f.write(encrypted)
-                    self.logger.debug("重新创建缓存文件成功")
-                except Exception as retry_e:
+        self.cache_file = bundle_path(self.server_url, self.cache_dir)
+
+    def _read_full(self) -> Optional[Dict[str, Any]]:
+        return read_state_dict(self.server_url, base_dir=self.cache_dir)
+
+    def _write_bundle_with_retry(self, data: Dict[str, Any]) -> bool:
+        for attempt in range(2):
+            if write_state_dict(self.server_url, data, base_dir=self.cache_dir):
+                if platform.system() == 'Windows':
                     try:
-                        self.logger.debug(f"删除并重新创建缓存文件失败: {retry_e}")
+                        import ctypes
+                        ctypes.windll.kernel32.SetFileAttributesW(str(self.cache_file), 2)
                     except Exception:
                         pass
-                    raise e
-            
-            # 尝试隐藏文件（Windows）
-            if platform.system() == 'Windows':
+                return True
+            if attempt == 0 and platform.system() == 'Windows' and self.cache_file.exists():
                 try:
                     import ctypes
-                    ctypes.windll.kernel32.SetFileAttributesW(str(self.cache_file), 0x02)  # HIDDEN
-                except:
+                    ctypes.windll.kernel32.SetFileAttributesW(str(self.cache_file), 128)
+                    self.cache_file.unlink()
+                except Exception:
                     pass
-            
-            return True
+        return False
+
+    def _read_row(self) -> Optional[Dict[str, Any]]:
+        d = self._read_full()
+        if not d:
+            return None
+        row = load_apps_map(d).get(self._software_name)
+        if not row or not isinstance(row, dict):
+            return None
+        return row
+
+    def _cache_dict_from_row(self, row: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        ts = row_last_success_ts(row)
+        if ts is None:
+            return None
+        return {'authorized': True, 'message': '设备已授权', 'cached_at': ts}
+
+    def _is_cache_valid_dict(self, cache: Optional[Dict[str, Any]]) -> bool:
+        if not cache:
+            return False
+        cached_at = cache.get('cached_at', 0)
+        try:
+            ca = float(cached_at)
+        except (TypeError, ValueError):
+            return False
+        if ca <= 0:
+            return False
+        return time.time() - ca < self.cache_validity_seconds
+
+    def _snapshot_auth_row(self) -> tuple[Optional[Dict[str, Any]], int]:
+        row = self._read_row()
+        if row_last_success_ts(row) is None:
+            return (None, 0)
+        raw = row.get('heartbeat_times')
+        try:
+            n = int(raw)
+        except (TypeError, ValueError):
+            self.clear_cache()
+            return (None, 0)
+        if n < 1:
+            self.clear_cache()
+            return (None, 0)
+        return (self._cache_dict_from_row(row), n)
+
+    def get_stored_heartbeat_times(self) -> int:
+        try:
+            _, n = self._snapshot_auth_row()
+            return n
+        except Exception:
+            return 0
+
+    def get_cache(self) -> Optional[Dict[str, Any]]:
+        try:
+            return self._cache_dict_from_row(self._read_row())
         except Exception as e:
             try:
-                self.logger.debug(f"保存缓存失败: {e}")
+                self.logger.debug(f'读取缓存异常: {e}')
+            except Exception:
+                pass
+            return None
+
+    def save_cache(self, authorized: bool, message: str, *, last_success_at: Optional[float]=None, heartbeat_times: Optional[int]=None, device_info_snapshot: Optional[Dict[str, Any]]=None) -> bool:
+        try:
+            now = time.time()
+            ts = last_success_at if last_success_at is not None else now
+            d = dict(self._read_full() or {})
+            for k in BUNDLE_ROOT_STRAY_KEYS:
+                d.pop(k, None)
+            apps_m = load_apps_map(d)
+            sub = dict(apps_m.get(self._software_name, {}))
+            sub.pop('software_name', None)
+            if not authorized:
+                for k in BUNDLE_PRODUCT_REVOKE_KEYS:
+                    sub.pop(k, None)
+                sub['device_id'] = self.device_id
+            else:
+                sub['device_id'] = self.device_id
+                sub['last_success_at'] = ts
+                if heartbeat_times is not None:
+                    sub['heartbeat_times'] = heartbeat_times
+                if device_info_snapshot is not None and isinstance(device_info_snapshot, dict) and (len(device_info_snapshot) > 0):
+                    sub[BUNDLE_PRODUCT_DEVICE_INFO_SNAPSHOT_KEY] = copy.deepcopy(device_info_snapshot)
+            apps_m[self._software_name] = sub
+            commit_apps_map(d, apps_m)
+            return self._write_bundle_with_retry(d)
+        except Exception as e:
+            try:
+                self.logger.debug(f'保存缓存失败: {e}')
             except Exception:
                 pass
             return False
-    
+
+    def load_device_info_snapshot(self) -> Optional[Dict[str, Any]]:
+        try:
+            row = self._read_row()
+            if not row:
+                return None
+            v = row.get(BUNDLE_PRODUCT_DEVICE_INFO_SNAPSHOT_KEY)
+            if v is None:
+                return None
+            if isinstance(v, str):
+                if not v.strip():
+                    return None
+                try:
+                    out = json.loads(v)
+                except json.JSONDecodeError:
+                    return None
+                return copy.deepcopy(out) if isinstance(out, dict) else None
+            if isinstance(v, dict):
+                return copy.deepcopy(v)
+            return None
+        except Exception:
+            return None
+
     def update_last_check(self) -> bool:
-        """
-        更新最后检查时间
-        
-        Returns:
-            是否更新成功
-        """
         try:
             cache = self.get_cache()
             if cache:
-                return self.save_cache(
-                    cache.get('authorized', False),
-                    cache.get('message', ''),
-                    cached_at=cache.get('cached_at', time.time()),
-                    last_check=time.time()
-                )
+                return self.save_cache(True, '', last_success_at=time.time())
             return False
         except Exception:
             return False
-    
+
     def is_cache_valid(self) -> bool:
-        """
-        检查缓存是否在有效期内
-        
-        Returns:
-            缓存是否有效
-        """
-        cache = self.get_cache()
-        if not cache:
-            return False
-        
-        cached_at = cache.get('cached_at', 0)
-        elapsed = time.time() - cached_at
-        
-        return elapsed < self.cache_validity_seconds
-    
+        return self._is_cache_valid_dict(self.get_cache())
+
     def needs_check(self) -> bool:
-        """
-        检查是否需要在线验证（超过检查间隔）
-        
-        Returns:
-            是否需要检查
-        """
         cache = self.get_cache()
         if not cache:
             return True
-        
-        last_check = cache.get('last_check', 0)
-        elapsed = time.time() - last_check
-        
-        return elapsed >= self.check_interval_seconds
-    
-    def get_cached_result(self) -> Optional[Dict[str, Any]]:
-        """
-        获取缓存的授权结果
-        
-        Returns:
-            缓存的授权结果或None
-        """
-        cache = self.get_cache()
-        if not cache:
-            return None
-        
-        return {
-            'authorized': cache.get('authorized', False),
-            'message': cache.get('message', ''),
-            'from_cache': True,
-            'cached_at': cache.get('cached_at', 0),
-            'last_check': cache.get('last_check', 0)
-        }
-    
-    def clear_cache(self) -> bool:
-        """
-        清除缓存
-        
-        Returns:
-            是否清除成功
-        """
+        cached_at = cache.get('cached_at', 0)
         try:
-            if self.cache_file.exists():
-                self.cache_file.unlink()
+            ts = float(cached_at)
+        except (TypeError, ValueError):
             return True
+        if ts <= 0:
+            return True
+        elapsed = time.time() - ts
+        return elapsed >= self.check_interval_seconds
+
+    def clear_cache(self) -> bool:
+        try:
+            d = self._read_full()
+            if not d:
+                return True
+            for k in BUNDLE_ROOT_STRAY_KEYS:
+                d.pop(k, None)
+            apps_m = load_apps_map(d)
+            sub = dict(apps_m.get(self._software_name, {}))
+            sub.pop('software_name', None)
+            for k in BUNDLE_PRODUCT_REVOKE_KEYS:
+                sub.pop(k, None)
+            sub['device_id'] = self.device_id
+            apps_m[self._software_name] = sub
+            commit_apps_map(d, apps_m)
+            any_app_device = any((isinstance(v, dict) and bool(row_device_id_str(v)) for v in apps_m.values()))
+            if not any_app_device:
+                if self.cache_file.exists():
+                    self.cache_file.unlink()
+                return True
+            return self._write_bundle_with_retry(d)
         except Exception:
             return False
 
 
 class AuthClient:
-    """授权客户端（带缓存功能）"""
-    
-    def __init__(
-        self, 
-        server_url: str, 
-        software_name: str,
-        device_id: Optional[str] = None, 
-        device_info: Optional[Dict[str, Any]] = None,
-        client_secret: Optional[str] = None,
-        cache_dir: Optional[str] = None,
-        enable_cache: bool = True,
-        cache_validity_days: int = 7,
-        check_interval_days: int = 2,
-        debug: bool = False,
-        software_version: Optional[str] = "0.0.0"
-    ):
-        """
-        初始化授权客户端
-        
-        Args:
-            server_url: 授权服务器地址，例如: http://localhost:8000
-            software_name: 软件名称（必填）
-            device_id: 设备ID，如果不提供则自动生成
-            device_info: 设备附加信息（可选），如果不提供则自动收集系统信息
-            client_secret: 客户端密钥（用于AES加密），如果不提供则从环境变量CLIENT_SECRET读取
-            cache_dir: 缓存目录（可选）
-            enable_cache: 是否启用缓存，默认True
-            cache_validity_days: 缓存有效期（天），默认7天
-            check_interval_days: 检查间隔（天），默认2天
-            debug: 是否输出调试日志
-        """
+
+    def __init__(self, server_url: str, software_name: str, device_id: Optional[str]=None, device_info: Optional[Dict[str, Any]]=None, client_secret: Optional[str]=None, cache_validity_days: int=7, check_interval_days: int=2, debug: bool=False, software_version: Optional[str]='0.0.0'):
         self.debug = debug
-        self.logger = logging.getLogger("py_auth_client")
+        self.logger = logging.getLogger('py_auth_client')
         if debug:
             if not self.logger.handlers:
                 handler = logging.StreamHandler()
-                formatter = logging.Formatter("[py-auth-client][%(levelname)s] %(message)s")
+                formatter = logging.Formatter('[py][%(levelname)s] %(message)s')
                 handler.setFormatter(formatter)
                 self.logger.addHandler(handler)
             self.logger.setLevel(logging.DEBUG)
             self.logger.propagate = False
-        
         self.server_url = server_url.rstrip('/')
-        system = platform.system()
-        facts = collect_device_facts()
-        mac_value = facts.get("mac")
-        
         self.software_name = software_name
         self.software_version = software_version
-        
-        # 生成 device_id 时包含 software_name，确保同一设备上的不同软件有不同的 device_id
-        self.device_id = build_device_id(self.server_url, device_id, facts, software_name)
-        
+        self._storage_base = get_client_storage_root()
+        _state_path = bundle_path(self.server_url, self._storage_base)
+        self._state_bundle_existed_before_init = _state_path.exists()
+        facts: Optional[Dict[str, Any]] = None
+        if device_id:
+            _loaded_pid: Any = _PERSISTED_DEVICE_ID_NOT_PREFETCHED
+        else:
+            _loaded_pid = load_persisted_device_id(self.server_url, software_name, base_dir=self._storage_base)
+        need_facts_for_new_id = not device_id and _loaded_pid is not _PERSISTED_DEVICE_ID_NOT_PREFETCHED and (not _loaded_pid)
+        _prefetch_ex: Optional[ThreadPoolExecutor] = None
+        _prefetch_fut: Optional[Future] = None
+        if need_facts_for_new_id:
+            facts = collect_device_facts(for_device_id=True)
+            _prefetch_ex = ThreadPoolExecutor(max_workers=1)
+            _prefetch_fut = _prefetch_ex.submit(collect_device_facts)
+        self.device_id = build_device_id(self.server_url, device_id, facts if facts is not None else {}, software_name, base_dir=self._storage_base, persisted_device_id=_loaded_pid if not device_id else _PERSISTED_DEVICE_ID_NOT_PREFETCHED)
         try:
             self.hostname = socket.gethostname()
         except Exception:
             try:
-                self.hostname = facts.get("hostname_value") or "Unknown"
+                self.hostname = (facts or {}).get('hostname_value') or 'Unknown'
             except Exception:
-                self.hostname = "Unknown"
-        
+                self.hostname = 'Unknown'
+        self._device_info_deferred = False
         if device_info is not None:
             self.device_info = dict(device_info)
-        else:
+        elif need_facts_for_new_id:
+            self._device_info_deferred = True
+            self.device_info = {}
+        elif facts is not None:
             self.device_info = build_device_info(facts, device_info)
-        self.device_info["software_version"] = self.software_version
-        self.client_secret = client_secret or os.getenv("CLIENT_SECRET", "")
-        if not self.client_secret:
-            raise ValueError(
-                "CLIENT_SECRET未配置！请在初始化时传入client_secret参数，"
-                "或设置环境变量CLIENT_SECRET。这是安全要求，必须配置。"
-            )
-        
-        self._init_encryption_key()
-        
-        self.enable_cache = enable_cache
-        if enable_cache:
-            self.cache = AuthCache(
-                cache_dir, 
-                self.device_id,
-                self.server_url,
-                self.software_name,
-                cache_validity_days=cache_validity_days,
-                check_interval_days=check_interval_days
-            )
         else:
-            self.cache = None
-    
+            self._device_info_deferred = True
+            self.device_info = {}
+        self.device_info['software_version'] = self.software_version
+        self.device_info['sdk'] = {'language': 'python', 'sdk_name': 'py_auth_client', 'sdk_version': __version__, 'runtime': f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}'}
+        self.client_secret = client_secret or os.getenv('CLIENT_SECRET', '')
+        if not self.client_secret:
+            raise ValueError('CLIENT_SECRET未配置！请在初始化时传入client_secret参数，或设置环境变量CLIENT_SECRET。这是安全要求，必须配置。')
+        self._cipher: Optional[Any] = None
+        self.cache = AuthCache(self._storage_base, self.device_id, self.server_url, software_name=self.software_name, cache_validity_days=cache_validity_days, check_interval_days=check_interval_days)
+        self._facts_prefetch_executor: Optional[ThreadPoolExecutor] = None
+        self._facts_prefetch_future: Optional[Future] = None
+        if self._device_info_deferred:
+            _snap = self.cache.load_device_info_snapshot()
+            if _snap:
+                self.device_info = _snap
+                self.device_info['software_version'] = self.software_version
+                self.device_info['sdk'] = {'language': 'python', 'sdk_name': 'py_auth_client', 'sdk_version': __version__, 'runtime': f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}'}
+                self._device_info_deferred = False
+        if self._device_info_deferred:
+            if need_facts_for_new_id and _prefetch_fut is not None:
+                self._facts_prefetch_future = _prefetch_fut
+                self._facts_prefetch_executor = _prefetch_ex
+            else:
+                self._facts_prefetch_executor = ThreadPoolExecutor(max_workers=1)
+                self._facts_prefetch_future = self._facts_prefetch_executor.submit(collect_device_facts)
+
     def _log_debug(self, message: str):
         if self.debug:
             try:
                 self.logger.debug(message)
             except Exception:
                 pass
-    
+
+    def _ensure_full_device_info(self) -> None:
+        if not self._device_info_deferred:
+            return
+        fut = self._facts_prefetch_future
+        self._facts_prefetch_future = None
+        ex = self._facts_prefetch_executor
+        self._facts_prefetch_executor = None
+        if fut is not None:
+            try:
+                facts = fut.result()
+            except Exception:
+                facts = collect_device_facts()
+            if ex is not None:
+                try:
+                    ex.shutdown(wait=False)
+                except Exception:
+                    pass
+        else:
+            facts = collect_device_facts()
+        self.device_info = build_device_info(facts, None)
+        self.device_info['software_version'] = self.software_version
+        self.device_info['sdk'] = {'language': 'python', 'sdk_name': 'py_auth_client', 'sdk_version': __version__, 'runtime': f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}'}
+        self._device_info_deferred = False
+
     def _format_remaining_time(self, cached_at: float) -> str:
-        """
-        格式化剩余时间（从缓存时间开始计算）
-        
-        Args:
-            cached_at: 缓存时间戳
-            
-        Returns:
-            格式化的剩余时间字符串，如 "5天12小时30分钟"
-        """
         if not cached_at or cached_at <= 0:
-            return "未知"
-        
-        if not self.cache:
-            return "未知"
-        
+            return '未知'
         now = time.time()
         elapsed = now - cached_at
         remaining = self.cache.cache_validity_seconds - elapsed
-        
         if remaining <= 0:
-            return "已过期"
-        
-        days = int(remaining // 86400)
-        hours = int((remaining % 86400) // 3600)
-        minutes = int((remaining % 3600) // 60)
-        
+            return '已过期'
+        days = int(remaining // _SECONDS_PER_DAY)
+        hours = int(remaining % _SECONDS_PER_DAY // _SECONDS_PER_HOUR)
+        minutes = int(remaining % _SECONDS_PER_HOUR // _SECONDS_PER_MINUTE)
         parts = []
         if days > 0:
-            parts.append(f"{days}天")
+            parts.append(f'{days}天')
         if hours > 0:
-            parts.append(f"{hours}小时")
+            parts.append(f'{hours}小时')
         if minutes > 0 or not parts:
-            parts.append(f"{minutes}分钟")
-        
-        return "".join(parts) if parts else "0分钟"
-    
-    def _get_mac_address(self) -> Optional[str]:
-        """获取主网卡MAC地址"""
-        try:
-            mac_int = uuid.getnode()
-            # 检查是否是随机生成的MAC（第8位为1表示随机）
-            if (mac_int >> 40) & 1:
-                return None
-            mac = ':'.join(['{:02x}'.format((mac_int >> elements) & 0xff) 
-                           for elements in range(0, 2*6, 2)][::-1])
-            return mac
-        except Exception:
-            return None
-    
-    def _init_encryption_key(self):
-        """初始化AES加密密钥"""
-        # 直接使用CLIENT_SECRET的SHA256哈希作为密钥
+            parts.append(f'{minutes}分钟')
+        return ''.join(parts) if parts else '0分钟'
+
+    def _ensure_cipher(self) -> None:
+        if self._cipher is not None:
+            return
+        from cryptography.fernet import Fernet
         key_bytes = hashlib.sha256(self.client_secret.encode('utf-8')).digest()
         key = base64.urlsafe_b64encode(key_bytes)
-        self.cipher = Fernet(key)
-    
+        self._cipher = Fernet(key)
+
     def _encrypt_data(self, data: Dict[str, Any]) -> str:
-        """加密数据"""
+        self._ensure_cipher()
         json_str = json.dumps(data, ensure_ascii=False, separators=(',', ':'))
-        return self.cipher.encrypt(json_str.encode('utf-8')).decode('utf-8')
-    
+        return self._cipher.encrypt(json_str.encode('utf-8')).decode('utf-8')
+
     def _decrypt_data(self, encrypted_data: str) -> Optional[Dict[str, Any]]:
-        """解密数据"""
+        self._ensure_cipher()
         try:
-            decrypted = self.cipher.decrypt(encrypted_data.encode('utf-8'))
+            decrypted = self._cipher.decrypt(encrypted_data.encode('utf-8'))
             return json.loads(decrypted.decode('utf-8'))
         except Exception:
             return None
-    
-    def _check_online(self) -> Dict[str, Any]:
-        """在线检查授权状态（使用AES加密）"""
+
+    def _post_heartbeat(self, di: Dict[str, Any], heartbeat_times: int) -> Dict[str, Any]:
+        import requests
+
+        di = copy.deepcopy(di) if di else {}
+        sk = dict(di.get('sdk') or {})
+        sk['heartbeat_times'] = heartbeat_times
+        di['sdk'] = sk
+        request_data = {'device_id': self.device_id, 'software_name': self.software_name, 'device_info': di}
         try:
-            self._log_debug("开始在线订阅请求...")
-            request_data = {
-                "device_id": self.device_id,
-                "software_name": self.software_name,
-                "device_info": self.device_info
-            }
-            
-            response = requests.post(
-                f"{self.server_url}/api/auth/heartbeat",
-                json={"encrypted_data": self._encrypt_data(request_data)},
-                timeout=10
-            )
-            
+            response = requests.post(f'{self.server_url}/api/auth/heartbeat', json={'encrypted_data': self._encrypt_data(request_data)}, timeout=_DEFAULT_HEARTBEAT_TIMEOUT_SEC)
             if response.status_code == 200:
-                decrypted = self._decrypt_data(response.json().get("encrypted_data", ""))
+                decrypted = self._decrypt_data(response.json().get('encrypted_data', ''))
                 if decrypted:
                     self._log_debug(f"在线订阅成功，authorized={decrypted.get('authorized')}")
-                    return {
-                        'authorized': decrypted.get('authorized', False),
-                        'message': decrypted.get('message', ''),
-                        'success': True,
-                        'from_cache': False
-                    }
-                self._log_debug("在线订阅响应解密失败")
+                    return {'authorized': decrypted.get('authorized', False), 'message': decrypted.get('message', ''), 'success': True, 'from_cache': False}
+                self._log_debug('在线订阅响应解密失败')
                 return {'authorized': False, 'message': '解密响应失败', 'success': False, 'from_cache': False}
-            
             error_msg = response.json().get('detail', f'服务器错误: {response.status_code}') if response.status_code == 403 else f'服务器错误: {response.status_code}'
-            self._log_debug(f"在线订阅失败，status={response.status_code}, message={error_msg}")
-            return {
-                'authorized': False,
-                'message': error_msg,
-                'success': False,
-                'from_cache': False,
-                'is_auth_error': response.status_code == 403
-            }
+            self._log_debug(f'在线订阅失败，status={response.status_code}, message={error_msg}')
+            return {'authorized': False, 'message': error_msg, 'success': False, 'from_cache': False, 'is_auth_error': response.status_code == 403}
         except requests.exceptions.RequestException as e:
-            self._log_debug(f"在线订阅请求异常: {str(e)}")
+            self._log_debug(f'在线订阅请求异常: {str(e)}')
             return {'authorized': False, 'message': f'连接失败: {str(e)}', 'success': False, 'from_cache': False}
         except Exception as e:
-            self._log_debug(f"在线订阅未知异常: {str(e)}")
+            self._log_debug(f'在线订阅未知异常: {str(e)}')
             return {'authorized': False, 'message': f'未知错误: {str(e)}', 'success': False, 'from_cache': False}
-    
-    def check_authorization(self, force_online: bool = False) -> Dict[str, Any]:
-        """
-        检查设备授权状态（带缓存）
-        
-        缓存策略：
-        - 优先检查本地缓存，缓存有效（7天内）则直接返回授权结果并刷新last_check
-        - 缓存失效时才向服务端发起订阅请求，成功则更新缓存
-        - 订阅（在线）失败不修改/清空缓存，直接返回失败结果
-        
-        Args:
-            force_online: 强制在线检查（已弃用，始终在线检查）
-        
-        Returns:
-            dict: {
-                'authorized': bool,  # 是否授权
-                'message': str,      # 消息
-                'success': bool,     # 请求是否成功
-                'from_cache': bool   # 是否来自缓存
-            }
-        """
-        if not self.enable_cache or self.cache is None:
-            return self._check_online()
-        
-        cache_data = None
+
+    def _check_online_worker(self, heartbeat_times: int) -> Dict[str, Any]:
+        from concurrent.futures import ALL_COMPLETED, wait
+
+        _need_pub = self._device_info_deferred or _device_info_lacks_nonblank_public_ip(self.device_info)
         try:
-            self._log_debug(f"尝试读取缓存: {self.cache.cache_file}")
-            self._log_debug(f"缓存文件存在: {self.cache.cache_file.exists()}")
-            cache_data = self.cache.get_cache()
-        except Exception:
-            self._log_debug("读取缓存异常")
-            cache_data = None
-        
-        # 若标准读取失败，尝试宽松解密一次（可能存在旧格式或偏移）
-        if cache_data is None and self.cache.cache_file.exists():
+                                                                             
+            _pool = ThreadPoolExecutor(max_workers=2)
             try:
-                self._log_debug("尝试宽松解密缓存（直接读原始文件）")
-                with open(self.cache.cache_file, 'rb') as f:
-                    encrypted_data = f.read()
-                decrypted = self.cache._deobfuscate(encrypted_data)
-                if decrypted:
-                    raw = json.loads(decrypted.decode('utf-8'))
-                    cache_data = {
-                        'authorized': raw.get('a', False),
-                        'message': raw.get('m', ''),
-                        'cached_at': raw.get('c', 0),
-                        'last_check': raw.get('l', 0),
-                    }
+                _fe = _pool.submit(self._ensure_full_device_info)
+                _fi = _pool.submit(fetch_public_ip) if _need_pub else None
+                _futs = [_fe] + ([_fi] if _fi is not None else [])
+                wait(_futs, return_when=ALL_COMPLETED)
+                _fe.result()
+                pub = _fi.result() if _fi is not None else ''
+            finally:
+                _pool.shutdown(wait=False)
+            self._log_debug('开始在线订阅请求...')
+            di = dict(self.device_info)
+            nw = dict(di.get('network') or {})
+            if pub:
+                nw['public_ip'] = pub
+            if nw:
+                di['network'] = nw
+            if pub:
+                self.device_info['network'] = dict(nw)
+            return self._post_heartbeat(di, heartbeat_times)
+        except Exception as e:
+            self._log_debug(f'在线订阅未知异常: {str(e)}')
+            return {'authorized': False, 'message': f'未知错误: {str(e)}', 'success': False, 'from_cache': False}
+
+    def _check_online_fast_worker(self, heartbeat_times: int) -> Dict[str, Any]:
+        self._log_debug('轻量在线订阅请求（不等待全量 device_info / 公网 IP）...')
+        di = copy.deepcopy(self.device_info) if self.device_info else {}
+        di['software_version'] = self.software_version
+        _base_sdk = {'language': 'python', 'sdk_name': 'py_auth_client', 'sdk_version': __version__, 'runtime': f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}'}
+        sk = dict(di.get('sdk') or {})
+        for _k, _v in _base_sdk.items():
+            sk.setdefault(_k, _v)
+        di['sdk'] = sk
+        if not di.get('hostname'):
+            di['hostname'] = self.hostname
+        di.setdefault('platform', platform.platform())
+        return self._post_heartbeat(di, heartbeat_times)
+
+    def _check_online_fast(self, heartbeat_times: int) -> Dict[str, Any]:
+        from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FuturesTimeout
+
+        executor = ThreadPoolExecutor(max_workers=1)
+        try:
+            future = executor.submit(self._check_online_fast_worker, heartbeat_times)
+            try:
+                return future.result(timeout=_ONLINE_CHECK_FAST_WALL_SEC)
+            except _FuturesTimeout:
+                self._log_debug(f'轻量在线订阅超出时限 {_ONLINE_CHECK_FAST_WALL_SEC:g}s')
+                return {'authorized': False, 'message': f'连接失败: 轻量请求超时（{_ONLINE_CHECK_FAST_WALL_SEC:g}s）', 'success': False, 'from_cache': False}
+        finally:
+            executor.shutdown(wait=False)
+
+    def _check_online(self, heartbeat_times: int) -> Dict[str, Any]:
+        from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FuturesTimeout
+        _wall = _online_check_effective_wall_sec(self._device_info_deferred or _device_info_lacks_nonblank_public_ip(self.device_info))
+        executor = ThreadPoolExecutor(max_workers=1)
+        try:
+            future = executor.submit(self._check_online_worker, heartbeat_times)
+            try:
+                return future.result(timeout=_wall)
+            except _FuturesTimeout:
+                self._log_debug(f'在线订阅超出总时限 {_wall}s（含 device_info 推迟时的全量采集 + 公网 IP + 心跳；Windows 等对无服务地址的 TCP 重传可能绕过单阶段 timeout）')
+                return {'authorized': False, 'message': f'连接失败: 请求超时（在线阶段墙钟上限 {_wall:g}s）', 'success': False, 'from_cache': False}
+        finally:
+            executor.shutdown(wait=False)
+
+    def _write_check_cache_retries(self, online_result: Dict[str, Any], heartbeat_times_if_authorized: Optional[int]) -> bool:
+        hb = heartbeat_times_if_authorized if online_result.get('authorized') else None
+        snap = copy.deepcopy(self.device_info) if online_result.get('authorized') else None
+        saved = False
+        for _attempt in range(3):
+            if self.cache.save_cache(online_result['authorized'], '', heartbeat_times=hb, device_info_snapshot=snap):
+                saved = True
+                break
+            time.sleep(0.05)
+        self._log_debug(f'写入缓存结果: {saved} -> {self.cache.cache_file}')
+        return saved
+
+    def check_authorization_progressive(self, force_online: bool=False) -> Dict[str, Any]:
+        cache_data = None
+        stored_hb = 0
+        try:
+            if self.debug:
+                cf = self.cache.cache_file
+                now = cf.exists()
+                pre = self._state_bundle_existed_before_init
+                if now and pre:
+                    state_desc = '启动前已存在'
+                elif now and (not pre):
+                    state_desc = '启动前不存在，构造客户端时已新建（device_id 持久化）'
+                elif not now and pre:
+                    state_desc = '启动前曾有，当前缺失（异常）'
                 else:
-                    self._log_debug("宽松解密失败（结果为空）")
-            except Exception as e:
-                self._log_debug(f"宽松解密异常: {e}")
-        
-        # 缓存有效时，先返回缓存结果，然后继续尝试在线订阅来更新订阅
-        cache_valid = False
-        if cache_data:
-            cached_at = cache_data.get('cached_at', 0)
-            if cached_at > 0:
-                elapsed = time.time() - cached_at
-                if elapsed < self.cache.cache_validity_seconds:
-                    cache_valid = True
-                    self._log_debug("命中有效缓存，直接授权通过")
-        
-        
+                    state_desc = '不存在（持久化可能失败）'
+                try:
+                    raw_sz = cf.stat().st_size if cf.exists() else 0
+                except Exception:
+                    raw_sz = 0
+                self._log_debug(f'状态包: {cf} | {state_desc} | 密文 {raw_sz} bytes')
+            cache_data, stored_hb = self.cache._snapshot_auth_row()
+        except Exception:
+            self._log_debug('读取缓存异常')
+            cache_data = None
+            stored_hb = 0
+        cache_valid = self.cache._is_cache_valid_dict(cache_data)
         if cache_valid:
-            self._log_debug("缓存有效，继续尝试在线订阅来更新订阅")
+            self._log_debug('本地缓存仍在有效期内（在线失败时可作后备）')
+            self._log_debug('缓存有效，继续尝试在线订阅来更新订阅')
+        elif cache_data:
+            self._log_debug('缓存存在但已过期，准备发起在线订阅请求')
         else:
-            if cache_data:
-                self._log_debug("缓存存在但已过期，准备发起在线订阅请求")
-            else:
-                self._log_debug("未找到缓存，准备发起在线订阅请求")
-        
-        online_result = self._check_online()
-        
+            self._log_debug('未找到缓存，准备发起在线订阅请求')
+        next_hb = stored_hb + 1
+        _ = force_online
+
+        r_fast = self._check_online_fast(next_hb)
+        if r_fast.get('success'):
+            if r_fast.get('authorized'):
+                self._log_debug('在线订阅成功，更新缓存')
+                self._write_check_cache_retries(r_fast, next_hb)
+                self._log_debug('轻量心跳已落盘，发起全量 device_info 补全心跳...')
+                r_full = self._check_online(next_hb + 1)
+                if r_full.get('success'):
+                    self._log_debug('在线订阅成功，更新缓存')
+                    self._write_check_cache_retries(r_full, (next_hb + 1) if r_full.get('authorized') else None)
+                    return r_full
+                gc = self.cache.get_cache()
+                if gc and self.cache.is_cache_valid():
+                    remaining = self._format_remaining_time(gc.get('cached_at', 0))
+                    self._log_debug(f'补全心跳失败，沿用轻量结果，订阅剩余时间: {remaining}')
+                    return {'authorized': True, 'message': gc.get('message', ''), 'success': True, 'from_cache': True}
+                return r_full
+            self._write_check_cache_retries(r_fast, None)
+            return r_fast
+
+        online_result = self._check_online(next_hb)
         if online_result['success']:
-            self._log_debug("在线订阅成功，更新缓存")
-            saved = self.cache.save_cache(online_result['authorized'], online_result['message'])
-            self._log_debug(f"写入缓存结果: {saved} -> {self.cache.cache_file}")
+            self._log_debug('在线订阅成功，更新缓存')
+            self._write_check_cache_retries(online_result, next_hb if online_result['authorized'] else None)
             return online_result
-        
         if cache_valid:
             cached_at = cache_data.get('cached_at', 0)
             remaining = self._format_remaining_time(cached_at)
             self._log_debug(f"在线订阅失败，但缓存有效，使用缓存结果: {online_result.get('message')}，订阅剩余时间: {remaining}")
-            return {
-                'authorized': cache_data.get('authorized', False),
-                'message': cache_data.get('message', ''),
-                'success': True,
-                'from_cache': True
-            }
-        
+            return {'authorized': True, 'message': cache_data.get('message', ''), 'success': True, 'from_cache': True}
         if cache_data:
             cached_at = cache_data.get('cached_at', 0)
             remaining = self._format_remaining_time(cached_at)
@@ -696,229 +613,168 @@ class AuthClient:
         else:
             self._log_debug(f"在线订阅失败，返回失败结果: {online_result.get('message')}")
         return online_result
-    
-    def require_authorization(self, raise_exception: bool = True, force_online: bool = False) -> bool:
-        """
-        要求授权，如果未授权则抛出异常或返回False
-        
-        Args:
-            raise_exception: 如果未授权是否抛出异常
-            force_online: 强制在线检查
-            
-        Returns:
-            bool: 是否已授权
-            
-        Raises:
-            AuthorizationError: 如果未授权且raise_exception=True
-        """
+
+    def check_authorization(self, force_online: bool=False) -> Dict[str, Any]:
+        cache_data = None
+        stored_hb = 0
+        try:
+            if self.debug:
+                cf = self.cache.cache_file
+                now = cf.exists()
+                pre = self._state_bundle_existed_before_init
+                if now and pre:
+                    state_desc = '启动前已存在'
+                elif now and (not pre):
+                    state_desc = '启动前不存在，构造客户端时已新建（device_id 持久化）'
+                elif not now and pre:
+                    state_desc = '启动前曾有，当前缺失（异常）'
+                else:
+                    state_desc = '不存在（持久化可能失败）'
+                try:
+                    raw_sz = cf.stat().st_size if cf.exists() else 0
+                except Exception:
+                    raw_sz = 0
+                self._log_debug(f'状态包: {cf} | {state_desc} | 密文 {raw_sz} bytes')
+            cache_data, stored_hb = self.cache._snapshot_auth_row()
+        except Exception:
+            self._log_debug('读取缓存异常')
+            cache_data = None
+            stored_hb = 0
+        cache_valid = self.cache._is_cache_valid_dict(cache_data)
+        if cache_valid:
+            self._log_debug('本地缓存仍在有效期内（在线失败时可作后备）')
+            self._log_debug('缓存有效，继续尝试在线订阅来更新订阅')
+        elif cache_data:
+            self._log_debug('缓存存在但已过期，准备发起在线订阅请求')
+        else:
+            self._log_debug('未找到缓存，准备发起在线订阅请求')
+        next_hb = stored_hb + 1
+        _ = force_online
+        online_result = self._check_online(next_hb)
+        if online_result['success']:
+            self._log_debug('在线订阅成功，更新缓存')
+            self._write_check_cache_retries(online_result, next_hb if online_result['authorized'] else None)
+            return online_result
+        if cache_valid:
+            cached_at = cache_data.get('cached_at', 0)
+            remaining = self._format_remaining_time(cached_at)
+            self._log_debug(f"在线订阅失败，但缓存有效，使用缓存结果: {online_result.get('message')}，订阅剩余时间: {remaining}")
+            return {'authorized': True, 'message': cache_data.get('message', ''), 'success': True, 'from_cache': True}
+        if cache_data:
+            cached_at = cache_data.get('cached_at', 0)
+            remaining = self._format_remaining_time(cached_at)
+            self._log_debug(f"在线订阅失败，缓存已过期，返回失败结果: {online_result.get('message')}，订阅剩余时间: {remaining}")
+        else:
+            self._log_debug(f"在线订阅失败，返回失败结果: {online_result.get('message')}")
+        return online_result
+
+    def require_authorization(self, raise_exception: bool=True, force_online: bool=False) -> bool:
         result = self.check_authorization(force_online=force_online)
-        
-        if not result['success']:
+        if not result['success'] or not result['authorized']:
             if raise_exception:
-                raise AuthorizationError(
-                    message=result['message'],
-                    result=result,
-                    device_id=self.device_id,
-                    server_url=self.server_url
-                )
+                raise AuthorizationError(message=result['message'], result=result, device_id=self.device_id, server_url=self.server_url)
             return False
-        
-        if not result['authorized']:
-            if raise_exception:
-                raise AuthorizationError(
-                    message=result['message'],
-                    result=result,
-                    device_id=self.device_id,
-                    server_url=self.server_url
-                )
-            return False
-        
         return True
-    
+
+    def can_soft_launch(self) -> bool:
+        c = self.cache.get_cache()
+        return bool(c and c.get("authorized") and self.cache.is_cache_valid())
+
+    def submit_check_authorization(self, force_online: bool=False) -> Future:
+        return get_auth_background_executor().submit(self.check_authorization, force_online)
+
+    def submit_check_authorization_progressive(self, force_online: bool=False) -> Future:
+        return get_auth_background_executor().submit(self.check_authorization_progressive, force_online)
+
+    def submit_require_authorization(self, *, raise_exception: bool=True, force_online: bool=False) -> Future:
+        return get_auth_background_executor().submit(self.require_authorization, raise_exception, force_online)
+
+    def start_background_refresh(self, *, force_online: bool=False, on_done: Optional[Callable[[Dict[str, Any]], None]]=None) -> tuple[bool, Future]:
+        soft = self.can_soft_launch()
+        fut = self.submit_check_authorization_progressive(force_online)
+        if on_done is not None:
+
+            def _cb(f: Future) -> None:
+                try:
+                    on_done(f.result())
+                except Exception as e:
+                    on_done({'authorized': False, 'success': False, 'from_cache': False, 'message': str(e)})
+            fut.add_done_callback(_cb)
+        return (soft, fut)
+
     def clear_cache(self) -> bool:
-        """
-        清除本地缓存
-        
-        Returns:
-            是否清除成功
-        """
-        if self.cache:
-            return self.cache.clear_cache()
-        return True
-    
+        return self.cache.clear_cache()
+
     def get_authorization_info(self) -> Dict[str, Any]:
-        """
-        获取授权信息（用户友好的格式）
-        
-        Returns:
-            授权信息字典，包含授权状态、剩余时间、缓存信息等
-        """
-        result = self.check_authorization()
-        
-        info = {
-            'authorized': result.get('authorized', False),
-            'success': result.get('success', False),
-            'from_cache': result.get('from_cache', False),
-            'message': result.get('message', ''),
-            'device_id': self.device_id,
-            'server_url': self.server_url,
-        }
-        
-        if self.cache:
-            cache = self.cache.get_cache()
-            if cache:
-                cached_at = cache.get('cached_at', 0)
-                remaining = self._format_remaining_time(cached_at)
-                info['remaining_time'] = remaining
-                info['cache_valid'] = self.cache.is_cache_valid()
-                info['cached_at'] = cached_at
-                if cached_at > 0:
-                    info['cached_at_readable'] = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(cached_at))
-            else:
-                info['remaining_time'] = '无缓存'
-                info['cache_valid'] = False
-        
+        cache = self.cache.get_cache()
+        if cache:
+            info = {'authorized': cache.get('authorized', False), 'success': True, 'from_cache': True, 'message': cache.get('message', ''), 'device_id': self.device_id, 'server_url': self.server_url}
+            cached_at = cache.get('cached_at', 0)
+            remaining = self._format_remaining_time(cached_at)
+            info['remaining_time'] = remaining
+            info['cache_valid'] = self.cache.is_cache_valid()
+            info['cached_at'] = cached_at
+            if cached_at > 0:
+                info['cached_at_readable'] = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(cached_at))
+        else:
+            info = {'authorized': False, 'success': False, 'from_cache': False, 'message': '无本地授权缓存', 'device_id': self.device_id, 'server_url': self.server_url, 'remaining_time': '无缓存', 'cache_valid': False}
+        if self.debug:
+            try:
+                blob = json.dumps(info, ensure_ascii=False, indent=2)
+                print(f'[py][DEBUG] 授权信息摘要:\n{blob}')
+            except Exception:
+                pass
         return info
-    
+
     def get_cache_info(self) -> Optional[Dict[str, Any]]:
-        """
-        获取缓存信息（用于调试）
-        
-        Returns:
-            缓存信息
-        """
-        if not self.cache:
-            return None
-        
         cache = self.cache.get_cache()
         if not cache:
             return None
-        
         now = time.time()
         cached_at = cache.get('cached_at', 0)
-        last_check = cache.get('last_check', 0)
-        
-        return {
-            'authorized': cache.get('authorized'),
-            'message': cache.get('message'),
-            'cached_at': cached_at,
-            'last_check': last_check,
-            'cache_age_days': (now - cached_at) / 86400,
-            'last_check_age_days': (now - last_check) / 86400,
-            'cache_valid': self.cache.is_cache_valid(),
-            'needs_check': self.cache.needs_check(),
-            'cache_file': str(self.cache.cache_file)
-        }
-
+        return {'authorized': cache.get('authorized'), 'message': cache.get('message'), 'cached_at': cached_at, 'last_success_at': cached_at, 'cache_age_days': (now - cached_at) / _SECONDS_PER_DAY, 'cache_valid': self.cache.is_cache_valid(), 'needs_check': self.cache.needs_check(), 'cache_file': str(self.cache.cache_file)}
 
 class AuthorizationError(Exception):
-    """
-    授权错误异常
-    
-    当设备未授权或授权验证失败时抛出此异常。
-    
-    属性:
-        message: 错误消息
-        result: 授权检查结果字典（可选）
-        device_id: 设备ID（可选）
-        server_url: 服务器URL（可选）
-    """
-    
-    def __init__(
-        self, 
-        message: str, 
-        result: Optional[Dict[str, Any]] = None,
-        device_id: Optional[str] = None,
-        server_url: Optional[str] = None
-    ):
-        """
-        初始化授权错误异常
-        
-        Args:
-            message: 错误消息
-            result: 授权检查结果字典，包含 'authorized', 'message', 'success', 'from_cache' 等字段
-            device_id: 设备ID
-            server_url: 服务器URL
-        """
+
+    def __init__(self, message: str, result: Optional[Dict[str, Any]]=None, device_id: Optional[str]=None, server_url: Optional[str]=None):
         self.message = message
         self.result = result
         self.device_id = device_id
         self.server_url = server_url
         super().__init__(self.message)
-    
+
     def __str__(self) -> str:
-        """返回错误消息"""
         return self.message
-    
+
     def __repr__(self) -> str:
-        """返回异常的详细表示"""
         parts = [f"AuthorizationError('{self.message}'"]
         if self.device_id:
             parts.append(f", device_id='{self.device_id}'")
         if self.server_url:
             parts.append(f", server_url='{self.server_url}'")
-        parts.append(")")
-        return ", ".join(parts)
-    
+        parts.append(')')
+        return ', '.join(parts)
+
     @property
     def is_network_error(self) -> bool:
-        """
-        判断是否为网络错误
-        
-        Returns:
-            如果是网络连接错误返回True，否则返回False
-        """
         message_lower = self.message.lower()
-        check_message = (self.result.get('message', '').lower() if self.result else '')
-        
+        check_message = self.result.get('message', '').lower() if self.result else ''
         network_keywords = ['连接失败', '连接', 'network', 'timeout', 'connection']
-        return any(keyword in check_message or keyword in message_lower for keyword in network_keywords)
-    
+        return any((keyword in check_message or keyword in message_lower for keyword in network_keywords))
+
     @property
     def is_unauthorized(self) -> bool:
-        """
-        判断是否为未授权错误（设备未授权或被禁用）
-        
-        Returns:
-            如果是未授权错误返回True，否则返回False
-        """
         if self.result:
             return not self.result.get('authorized', False) and self.result.get('success', False)
         return '未授权' in self.message or '禁用' in self.message
-    
+
     @property
     def is_validation_error(self) -> bool:
-        """
-        判断是否为验证错误（无法验证授权）
-        
-        Returns:
-            如果是验证错误返回True，否则返回False
-        """
         if self.result:
             return not self.result.get('success', False)
         return '无法验证授权' in self.message or '验证失败' in self.message
 
-
-def check_authorization(
-    server_url: str, 
-    software_name: str,
-    device_id: Optional[str] = None, 
-    enable_cache: bool = True,
-    force_online: bool = False
-) -> bool:
-    """
-    便捷函数：检查授权状态
-    
-    Args:
-        server_url: 授权服务器地址
-        software_name: 软件名称（必填）
-        device_id: 设备ID（可选）
-        enable_cache: 是否启用缓存
-        force_online: 强制在线检查
-        
-    Returns:
-        bool: 是否已授权
-    """
-    client = AuthClient(server_url, software_name, device_id, enable_cache=enable_cache)
+def check_authorization(server_url: str, software_name: str, device_id: Optional[str]=None, force_online: bool=False) -> bool:
+    client = AuthClient(server_url, software_name, device_id)
     result = client.check_authorization(force_online=force_online)
     return result.get('authorized', False) and result.get('success', False)

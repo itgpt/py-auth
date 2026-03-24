@@ -123,7 +123,7 @@ const handleLogin = async () => {
     const data = await api.login(formData.value.username, formData.value.password)
     localStorage.setItem('username', data.username)
     ElMessage.success('登录成功')
-    router.push('/')
+    router.push({ name: 'Dashboard' })
   } catch (e) {
     error.value = e.message || '登录失败，请检查用户名和密码'
   } finally {

@@ -52,7 +52,7 @@
           </el-table>
         </div>
 
-        <!-- 新建/编辑用户对话框 -->
+        
         <el-dialog v-model="dialogVisible" :title="dialogTitle" width="90%" style="max-width: 450px;" @close="resetForm">
           <el-form :model="form" :rules="rules" ref="formRef" label-width="80px">
             <el-form-item label="用户名" prop="username">
@@ -82,8 +82,8 @@
 import { ref, onMounted, computed, nextTick } from 'vue'
 import { api } from '../api'
 import { ElMessage } from 'element-plus'
+import { reportApiError } from '../utils/errorFeedback'
 import { Plus } from '@element-plus/icons-vue'
-
 const users = ref([])
 const loading = ref(true)
 const dialogVisible = ref(false)
@@ -113,12 +113,7 @@ const fetchUsers = async () => {
     users.value = usersData
     currentUser.value = meData
   } catch (error) {
-    if (error.message.includes('登录已过期')) {
-      api.logout()
-      await router.push('/login')
-    } else {
-      ElMessage.error(`加载用户列表失败: ${error.message}`)
-    }
+    if (reportApiError(error, '加载用户列表失败')) return
   } finally {
     loading.value = false
   }
@@ -174,7 +169,7 @@ const handleSubmit = async () => {
         dialogVisible.value = false
         await fetchUsers()
       } catch (error) {
-        ElMessage.error(`操作失败: ${error.message}`)
+        if (reportApiError(error, '操作失败')) return
       }
     }
   })
@@ -186,7 +181,7 @@ const handleDelete = async (userId) => {
     ElMessage.success('用户删除成功')
     await fetchUsers()
   } catch (error) {
-    ElMessage.error(`删除失败: ${error.message}`)
+    if (reportApiError(error, '删除失败')) return
   }
 }
 

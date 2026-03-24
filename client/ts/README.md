@@ -1,14 +1,14 @@
-# py-auth-client
+# py-auth-client（TypeScript / Node.js）
 
-TypeScript/Node.js client for **py-auth**. Compatible with the Python and Go clients in this repository.
+与仓库内 Python、Go 客户端协议一致。安装与最小示例见下；**完整文档（配置、缓存、存储、`device_info`）见上一级 [client/README.md](../README.md#typescript)**（与 [STORAGE.md](../STORAGE.md) 对照阅读）。
 
-## Install
+## 安装
 
 ```bash
 npm i py-auth-client
 ```
 
-## Usage
+## 最小示例
 
 ```ts
 import { AuthClient, AuthorizationError } from "py-auth-client";
@@ -16,13 +16,11 @@ import { AuthClient, AuthorizationError } from "py-auth-client";
 const client = new AuthClient({
   serverUrl: "http://localhost:8000",
   softwareName: "我的软件",
-  clientSecret: process.env.CLIENT_SECRET!,
-  // debug: true,
+  clientSecret: process.env.CLIENT_SECRET ?? "",
 });
 
 try {
   await client.requireAuthorization();
-  console.log("authorized");
 } catch (e) {
   if (e instanceof AuthorizationError) {
     console.error(e.message);
@@ -31,17 +29,3 @@ try {
   throw e;
 }
 ```
-
-## API
-
-- `new AuthClient(config)`
-- `client.checkAuthorization()`
-- `client.requireAuthorization()`
-- `client.getAuthorizationInfo()`
-- `client.clearCache()`
-
-## Notes
-
-- Requires `clientSecret` or environment variable `CLIENT_SECRET`.
-- Uses Fernet-compatible encryption derived from `CLIENT_SECRET`.
-- Uses an obfuscated local cache file with a 7-day validity window.
