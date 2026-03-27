@@ -1,6 +1,6 @@
 name: Docker Server Build and Push
 
-# 镜像名与 docker-compose.yaml 中 auth-service 的 image 一致（非 mysql/phpmyadmin 的首个 image）
+# 镜像名：与 docker-compose.yaml 中 auth-service.image 保持一致（此处写死）
 # 仓库 Secrets: DOCKERHUB_USERNAME、DOCKERHUB_TOKEN（Docker Hub Access Token）
 
 on:
@@ -41,34 +41,17 @@ permissions:
 jobs:
   docker:
     runs-on: ubuntu-latest
+    env:
+      IMAGE_NAME: jockerdragon/py-auth-service
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-
-      - name: Image name from docker-compose.yaml
-        id: image
-        run: |
-          IMAGE=$(python3 << 'PY'
-          import re
-          with open("docker-compose.yaml", encoding="utf-8") as f:
-              text = f.read()
-          for m in re.finditer(r"^\s*image:\s*([^\s#]+)", text, re.MULTILINE):
-              img = m.group(1).strip("'\"")
-              if not any(x in img for x in ("mysql", "phpmyadmin")):
-                  print(img)
-                  break
-          else:
-              raise SystemExit("No application image found in docker-compose.yaml")
-          PY
-          )
-          echo "name=$IMAGE" >> "$GITHUB_OUTPUT"
-          echo "Pushing to Docker Hub: $IMAGE"
 
       - name: Docker meta
         id: meta
         uses: docker/metadata-action@v6
         with:
-          images: ${{ steps.image.outputs.name }}
+          images: ${{ env.IMAGE_NAME }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,prefix=
