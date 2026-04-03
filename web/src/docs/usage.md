@@ -1,53 +1,52 @@
 ## 设备字段说明
 
-### 设备 ID (`device_id`)
+本文说明管理后台设备列表和详情页中的主要字段含义。
 
-由客户端按与 Python 参考实现一致的规则生成（MAC、磁盘/根分区、CPU/内存/磁盘容量、系统与架构字符串等；含 `software_name`）。同一 `server_url` 与存储根下三端共用单个加密状态文件，各产品以 `software_name` 为键分条目存储；详见 `client/STORAGE.md`。
+### 设备 ID `device_id`
 
-### 设备详情 (`device_info`) 与 `sdk`
+`device_id` 由客户端生成，管理后台仅负责展示，用于区分不同设备。
 
-管理端以 JSON 展示。官方客户端自动附带 `device_info.sdk`：
+### 设备详情 `device_info`
 
-| 字段（`device_info.sdk`） | 说明 |
-|---------------------------|------|
-| `language` | `python` / `go` / `typescript` |
-| `sdk_name` / `sdk_version` / `runtime` | 包名、版本、运行时版本 |
-| `heartbeat_times` | 仅心跳请求：累计成功次数；与状态包条目内 `heartbeat_times` 同义 |
-
-授权成功落盘 `device_info_snapshot`（不含当次 `sdk.heartbeat_times`），下次冷启动可复用。各子对象概要：
+管理后台以 JSON 形式展示 `device_info`。官方客户端会自动附带 `device_info.sdk`。
 
 | 字段 | 说明 |
 |------|------|
-| `system` | 主机名、OS、内核/机器信息、用户名、运行时时长等 |
-| `network` | 优选 MAC/IP、`interfaces`、`public_ip`（外网探测失败可缺省） |
-| `memory` | `total_gb`、`free_gb`、`available_gb` 等 |
-| `cpu` | `model`、`count`、`physical_count`、`freq_*` 等 |
-| `disk` | 根卷摘要；有明细时为 `models` → `volumes`（`mount`、`total_gb`、`free_gb` 等）。历史数据可能有旧字段名 |
+| `language` | SDK 语言，取值通常为 `python`、`go`、`typescript` |
+| `sdk_name` | SDK 名称 |
+| `sdk_version` | SDK 版本 |
+| `runtime` | 运行时版本 |
+| `heartbeat_times` | 当前设备累计成功心跳次数 |
 
----
+设备快照 `device_info_snapshot` 会在授权成功后落盘，不包含当次 `sdk.heartbeat_times`。
 
-### 时间类字段
+### 常见子对象
 
-| 字段 | 何时更新 | 用途 |
+| 字段 | 说明 |
+|------|------|
+| `system` | 主机名、操作系统、内核、机器信息、用户名、运行时长等 |
+| `network` | MAC、IP、网络接口、公网 IP 等 |
+| `memory` | 内存总量、空闲量、可用量 |
+| `cpu` | CPU 型号、核心数、频率等 |
+| `disk` | 磁盘摘要与卷信息 |
+
+旧版本数据中的字段名可能不同，应以实际返回的 JSON 结构为准。
+
+## 时间字段
+
+| 字段 | 更新时机 | 含义 |
 |------|----------|------|
-| `created_at` | 设备首次请求后不变 | 注册时间 |
-| `updated_at` | 管理员改授权/备注或设备信息变更 | 管理变更追踪 |
-| `last_check` | 每次**成功**心跳/授权校验 | 活跃度 |
-
-列表默认可按上述字段排序（点击表头切换升降序）。
-
----
-
-## 客户端缓存（与列表字段的关系）
-
-检查类 API 会先在线心跳，成功则更新本地加密状态包；仅读接口不联网、不增心跳计数。在线失败时，若在本地快照有效期内（默认 7 天）仍可使用上次成功结果。检查间隔（默认 2 天）只用于客户端 `needs_check` 类提示，不用于跳过心跳。默认存储与文件命名见 `client/STORAGE.md`。
-
----
+| `created_at` | 设备首次请求时写入，之后不再改变 | 注册时间 |
+| `updated_at` | 管理员修改授权、备注，或设备上报的 `software_name`、`device_info` 发生变化时更新 | 最近一次设备记录变更时间 |
+| `last_check` | 每次成功心跳或授权校验时更新 | 最近一次成功校验时间 |
 
 ## 常见问题
 
-**活跃度（`last_check`）为什么常变？** 每次成功心跳/授权校验都会刷新。本地 7 天窗口是离线容错，不是减少心跳。
+**为什么 `last_check` 经常变化？**  
+因为每次成功心跳或授权校验都会刷新该字段。
 
-**管理变更追踪与活跃度？** `updated_at` 在管理员改授权/备注或设备 `software_name`/`device_info` 变更时刷新；`last_check` 表示最近一次成功校验。
+**`updated_at` 和 `last_check` 有什么区别？**  
+`updated_at` 表示设备记录发生变更的时间，`last_check` 表示最近一次成功校验的时间。
 
-**注册时间（`created_at`）能改吗？** 不能，设备首次请求写入后固定。
+**`created_at` 可以修改吗？**  
+不可以。该字段在设备首次写入时确定。

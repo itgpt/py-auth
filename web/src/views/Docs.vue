@@ -3,8 +3,7 @@
     <main class="page-content">
       <div class="card">
         <div class="docs-header">
-          <h1>📖 使用文档</h1>
-          <p>了解授权系统的核心概念和字段含义</p>
+          <h1>使用文档</h1>
         </div>
         <div class="markdown-body" v-html="renderedMarkdown"></div>
       </div>
@@ -27,20 +26,15 @@ onMounted(() => {
 
 <style scoped>
 .docs-header {
-  margin-bottom: 24px;
-  padding-bottom: 16px;
+  margin-bottom: 20px;
+  padding-bottom: 12px;
   border-bottom: 2px solid #e4e7ed;
 }
 .docs-header h1 {
-  margin: 0 0 8px 0;
+  margin: 0;
   font-size: 24px;
   color: var(--color-text-primary);
   font-weight: 600;
-}
-.docs-header p {
-  margin: 0;
-  font-size: 14px;
-  color: var(--color-text-tertiary);
 }
 .markdown-body {
   font-size: 14px;
