@@ -12,7 +12,7 @@ import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, Callable, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Callable, Optional
 
 if TYPE_CHECKING:
     from cryptography.fernet import Fernet
@@ -437,7 +437,7 @@ class AuthClient:
             raise ValueError(
                 "CLIENT_SECRET未配置！请在初始化时传入client_secret参数，或设置环境变量CLIENT_SECRET。这是安全要求，必须配置。"
             )
-        self._cipher: Optional["Fernet"] = None
+        self._cipher: Optional[Fernet] = None
         self.cache = AuthCache(
             self._storage_base,
             self.device_id,
