@@ -12,7 +12,10 @@ import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from cryptography.fernet import Fernet
 
 from .device_utils import (
     _PERSISTED_DEVICE_ID_NOT_PREFETCHED,
@@ -143,7 +146,7 @@ class AuthCache:
                     try:
                         import ctypes
 
-                        ctypes.windll.kernel32.SetFileAttributesW(
+                        ctypes.windll.kernel32.SetFileAttributesW(  # type: ignore
                             str(self.cache_file), 2
                         )
                     except Exception:
@@ -157,7 +160,7 @@ class AuthCache:
                 try:
                     import ctypes
 
-                    ctypes.windll.kernel32.SetFileAttributesW(str(self.cache_file), 128)
+                    ctypes.windll.kernel32.SetFileAttributesW(str(self.cache_file), 128)  # type: ignore
                     self.cache_file.unlink()
                 except Exception:
                     pass
@@ -194,11 +197,11 @@ class AuthCache:
 
     def _snapshot_auth_row(self) -> tuple[Optional[dict[str, Any]], int]:
         row = self._read_row()
-        if row_last_success_ts(row) is None:
+        if row is None or row_last_success_ts(row) is None:
             return (None, 0)
         raw = row.get("heartbeat_times")
         try:
-            n = int(raw)
+            n = int(raw) if raw is not None else 0
         except (TypeError, ValueError):
             self.clear_cache()
             return (None, 0)
@@ -428,12 +431,13 @@ class AuthClient:
             "sdk_version": __version__,
             "runtime": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
         }
-        self.client_secret = client_secret or os.getenv("CLIENT_SECRET", "")
+        secret = client_secret or os.getenv("CLIENT_SECRET", "")
+        self.client_secret: str = secret if secret is not None else ""
         if not self.client_secret:
             raise ValueError(
                 "CLIENT_SECRET未配置！请在初始化时传入client_secret参数，或设置环境变量CLIENT_SECRET。这是安全要求，必须配置。"
             )
-        self._cipher: Optional[Any] = None
+        self._cipher: Optional["Fernet"] = None
         self.cache = AuthCache(
             self._storage_base,
             self.device_id,
@@ -466,7 +470,7 @@ class AuthClient:
                     collect_device_facts
                 )
 
-    def _log_debug(self, message: str):
+    def _log_debug(self, message: str) -> None:
         if self.debug:
             try:
                 self.logger.debug(message)
@@ -534,13 +538,20 @@ class AuthClient:
     def _encrypt_data(self, data: dict[str, Any]) -> str:
         self._ensure_cipher()
         json_str = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
-        return self._cipher.encrypt(json_str.encode("utf-8")).decode("utf-8")
+        assert self._cipher is not None  # 确保 _cipher 不为 None
+        encrypted_bytes: bytes = self._cipher.encrypt(json_str.encode("utf-8"))
+        return encrypted_bytes.decode("utf-8")
 
     def _decrypt_data(self, encrypted_data: str) -> Optional[dict[str, Any]]:
         self._ensure_cipher()
         try:
-            decrypted = self._cipher.decrypt(encrypted_data.encode("utf-8"))
-            return json.loads(decrypted.decode("utf-8"))
+            assert self._cipher is not None  # 确保 _cipher 不为 None
+            decrypted_bytes: bytes = self._cipher.decrypt(
+                encrypted_data.encode("utf-8")
+            )
+            decrypted_str: str = decrypted_bytes.decode("utf-8")
+            result: dict[str, Any] = json.loads(decrypted_str)
+            return result
         except Exception:
             return None
 
@@ -629,7 +640,7 @@ class AuthClient:
             try:
                 _fe = _pool.submit(self._ensure_full_device_info)
                 _fi = _pool.submit(fetch_public_ip) if _need_pub else None
-                _futs = [_fe] + ([_fi] if _fi is not None else [])
+                _futs: list = [_fe] + ([_fi] if _fi is not None else [])
                 wait(_futs, return_when=ALL_COMPLETED)
                 _fe.result()
                 pub = _fi.result() if _fi is not None else ""
@@ -824,6 +835,7 @@ class AuthClient:
             )
             return online_result
         if cache_valid:
+            assert cache_data is not None  # 确保 cache_data 不为 None
             cached_at = cache_data.get("cached_at", 0)
             remaining = self._format_remaining_time(cached_at)
             self._log_debug(
@@ -891,6 +903,7 @@ class AuthClient:
             )
             return online_result
         if cache_valid:
+            assert cache_data is not None  # 确保 cache_data 不为 None
             cached_at = cache_data.get("cached_at", 0)
             remaining = self._format_remaining_time(cached_at)
             self._log_debug(
@@ -1098,4 +1111,6 @@ def check_authorization(
 ) -> bool:
     client = AuthClient(server_url, software_name, device_id)
     result = client.check_authorization(force_online=force_online)
-    return result.get("authorized", False) and result.get("success", False)
+    authorized: bool = result.get("authorized", False)
+    success: bool = result.get("success", False)
+    return authorized and success
