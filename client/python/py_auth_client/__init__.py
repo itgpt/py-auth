@@ -1,8 +1,8 @@
 from .auth_client import (
-    __version__,
-    AuthClient,
     AuthCache,
+    AuthClient,
     AuthorizationError,
+    __version__,
     check_authorization,
     get_auth_background_executor,
     shutdown_auth_background_executor,
@@ -23,4 +23,3 @@ __all__ = [
     "collect_device_facts",
     "get_client_storage_root",
 ]
-

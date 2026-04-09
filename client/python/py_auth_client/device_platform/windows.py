@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, Optional
+from typing import Any
 
 
-def _windows_nt_current_version_reg() -> Dict[str, Any]:
+def _windows_nt_current_version_reg() -> dict[str, Any]:
     """读注册表 CurrentVersion，与 Go device_windows 语义对齐（ASCII 友好、含 UBR）。"""
-    out: Dict[str, Any] = {}
+    out: dict[str, Any] = {}
     try:
         import winreg
 
@@ -34,7 +34,7 @@ def _windows_nt_current_version_reg() -> Dict[str, Any]:
     return out
 
 
-def apply_os_version_facts(facts: Dict[str, Any]) -> None:
+def apply_os_version_facts(facts: dict[str, Any]) -> None:
     """用 CurrentBuild + UBR 覆盖 version，避免 platform.version() 缺修订号；release 与 Go 一致（build≥22000 → 11）。"""
     reg = _windows_nt_current_version_reg()
     cb = reg.get("CurrentBuild")
@@ -60,7 +60,7 @@ def apply_os_version_facts(facts: Dict[str, Any]) -> None:
         facts["windows_product_name"] = str(reg["ProductName"]).strip()
 
 
-def cpu_model_platform_specific() -> Optional[str]:
+def cpu_model_platform_specific() -> str | None:
     """与 Go getCPUInfoWindows 一致，读 Win32_Processor.Name。"""
     try:
         import subprocess
@@ -92,7 +92,7 @@ def cpu_model_platform_specific() -> Optional[str]:
 
 def root_disk_mount_and_id() -> tuple[str, str]:
     """与 Go rootDiskID 对齐；勿用 disk_partitions()[0]（常为非系统盘）。"""
-    d = (os.environ.get("SystemDrive", "C:").rstrip("\\") + "\\")
+    d = os.environ.get("SystemDrive", "C:").rstrip("\\") + "\\"
     return d, d
 
 

@@ -1,7 +1,7 @@
 import json
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 
 from py_auth_client import (
     AuthClient,
@@ -11,7 +11,9 @@ from py_auth_client import (
 
 
 def _client_secret() -> Optional[str]:
-    text = Path(f"{Path(__file__).resolve().parent.parent.parent}/.env").read_text(encoding="utf-8")
+    text = Path(f"{Path(__file__).resolve().parent.parent.parent}/.env").read_text(
+        encoding="utf-8"
+    )
     for line in text.splitlines():
         s = line.strip()
         if not s or s.startswith("#") or "=" not in s:
@@ -28,7 +30,7 @@ def main() -> None:
         print("缺少 CLIENT_SECRET", file=sys.stderr)
         sys.exit(1)
 
-    clients: List[AuthClient] = [
+    clients: list[AuthClient] = [
         AuthClient(
             server_url="http://localhost:8000",
             software_name="软件python示例",
@@ -44,7 +46,10 @@ def main() -> None:
         if r.get("success") and r.get("authorized"):
             print("后台刷新：仍授权")
         else:
-            print(f"后台刷新：{r.get('message', '失败')}（可在此禁用功能）", file=sys.stderr)
+            print(
+                f"后台刷新：{r.get('message', '失败')}（可在此禁用功能）",
+                file=sys.stderr,
+            )
 
     futures = []
     for c in clients:

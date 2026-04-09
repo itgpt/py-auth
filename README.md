@@ -29,7 +29,7 @@ docker compose up -d
 
 说明：
 
-- 使用 [docker-compose.yaml](/e:/py-auth/docker-compose.yaml)
+- 使用 [docker-compose.yaml](docker-compose.yaml)
 - 默认使用 SQLite
 - 数据持久化到 Docker 卷 `auth_data`
 - 服务地址：`http://127.0.0.1:8000`
@@ -194,8 +194,67 @@ pnpm build
 | [docs/dev/client-python-release.md](/e:/py-auth/docs/dev/client-python-release.md) | Python 客户端构建与发布 |
 | [docs/dev/client-ts-build.md](/e:/py-auth/docs/dev/client-ts-build.md) | TypeScript 客户端构建说明 |
 
+## 代码质量与开发工具
+
+本项目采用现代化的 Python 开发工具链，确保代码质量和一致性。
+
+### 开发工具
+
+```bash
+# 安装开发依赖
+make dev-install
+
+# 运行代码检查
+make lint
+
+# 格式化代码
+make format
+
+# 运行测试
+make test
+
+# 运行所有检查
+make check
+```
+
+### 代码质量工具
+
+- **Black**: 代码格式化
+- **Ruff**: 极速的 Python linter 和代码格式化工具
+- **MyPy**: 静态类型检查
+- **isort**: 导入排序
+- **pytest**: 测试框架
+- **pre-commit**: Git 提交前检查
+
+### 代码质量检查脚本
+
+```bash
+# 运行完整代码质量检查
+./scripts/check-code-quality.sh
+
+# 自动修复问题
+./scripts/check-code-quality.sh --fix
+```
+
+### 提交前检查
+
+安装 pre-commit 钩子：
+
+```bash
+pre-commit install
+pre-commit run --all-files
+```
+
 ## 备注
 
 - 默认可以直接使用 SQLite 启动
 - 生产环境必须替换 `SECRET_KEY`、`CLIENT_SECRET` 和默认管理员密码
 - 仓库中的 `auth.db` 是本地开发数据库文件
+
+## 贡献指南
+
+1. 在开始开发前，请确保安装了所有开发依赖
+2. 运行 `make check` 确保代码符合规范
+3. 添加新功能时请同时添加测试
+4. 提交代码前运行 `pre-commit run --all-files`
+5. 确保所有测试通过

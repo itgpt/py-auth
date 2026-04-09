@@ -1,22 +1,28 @@
-from pydantic import BaseModel, Field
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Any, Optional
+
+from pydantic import BaseModel, Field
+
 
 class EncryptedRequest(BaseModel):
     """加密的请求数据"""
-    encrypted_data: str                    
+
+    encrypted_data: str
+
 
 class DeviceAuthRequest(BaseModel):
     """设备授权请求（检查/注册共用）"""
+
     device_id: str
-    software_name: Optional[str] = None       
-    device_info: Optional[Dict[str, Any]] = None                                                                                             
+    software_name: Optional[str] = None
+    device_info: Optional[dict[str, Any]] = None
+
 
 class DeviceResponse(BaseModel):
     id: int
     device_id: str
-    software_name: Optional[str]       
-    device_info: Optional[Dict[str, Any]]                                      
+    software_name: Optional[str]
+    device_info: Optional[dict[str, Any]]
     remark: Optional[str]
     is_authorized: bool
     created_at: datetime = Field(description="注册时间：设备首次请求后不变")
@@ -32,9 +38,12 @@ class DeviceResponse(BaseModel):
     class Config:
         from_attributes = True
 
+
 class EncryptedResponse(BaseModel):
     """加密的响应数据"""
-    encrypted_data: str                    
+
+    encrypted_data: str
+
 
 class UserCreate(BaseModel):
     username: str
@@ -42,14 +51,17 @@ class UserCreate(BaseModel):
     is_admin: Optional[bool] = False
     is_active: Optional[bool] = True
 
+
 class UserUpdate(BaseModel):
     password: Optional[str] = None
     is_admin: Optional[bool] = None
     is_active: Optional[bool] = None
 
+
 class UserLogin(BaseModel):
     username: str
     password: str
+
 
 class UserResponse(BaseModel):
     id: int
@@ -57,9 +69,10 @@ class UserResponse(BaseModel):
     is_active: bool
     is_admin: bool
     created_at: datetime
-    
+
     class Config:
         from_attributes = True
+
 
 class TokenResponse(BaseModel):
     access_token: str
@@ -67,12 +80,14 @@ class TokenResponse(BaseModel):
     username: str
     is_admin: bool
 
+
 class ChangePasswordRequest(BaseModel):
     old_password: str
     new_password: str
 
+
 class ConfigUpdate(BaseModel):
-    configs: Dict[str, Any]
+    configs: dict[str, Any]
 
 
 class OperationLogResponse(BaseModel):
@@ -81,7 +96,7 @@ class OperationLogResponse(BaseModel):
     action: str
     target_type: str
     target_id: Optional[str]
-    detail: Optional[Dict[str, Any]]
+    detail: Optional[dict[str, Any]]
     created_at: datetime
 
     class Config:

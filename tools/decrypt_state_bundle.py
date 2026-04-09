@@ -122,9 +122,11 @@ def _redact_device_info_snapshots_for_display(obj: object) -> object:
     """默认隐藏各处的 device_info_snapshot 内容，仅保留占位字符串 HIDE。"""
     if isinstance(obj, dict):
         return {
-            k: "HIDE"
-            if k == _BUNDLE_DEVICE_INFO_SNAPSHOT_KEY
-            else _redact_device_info_snapshots_for_display(v)
+            k: (
+                "HIDE"
+                if k == _BUNDLE_DEVICE_INFO_SNAPSHOT_KEY
+                else _redact_device_info_snapshots_for_display(v)
+            )
             for k, v in obj.items()
         }
     if isinstance(obj, list):

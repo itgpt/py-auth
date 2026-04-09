@@ -3,22 +3,24 @@
 from __future__ import annotations
 
 import sys
-from typing import Any, Dict, Optional
+from typing import Any
 
 
-def apply_os_version_facts(_facts: Dict[str, Any]) -> None:
+def apply_os_version_facts(_facts: dict[str, Any]) -> None:
     return None
 
 
-def cpu_model_platform_specific() -> Optional[str]:
+def cpu_model_platform_specific() -> str | None:
     if sys.platform == "linux":
         try:
             with open("/proc/cpuinfo", encoding="utf-8", errors="replace") as f:
                 for line in f:
                     line_l = line.lower()
-                    if line_l.startswith("model name") or line_l.startswith(
-                        "cpu model\t"
-                    ) or line_l.startswith("processor model"):
+                    if (
+                        line_l.startswith("model name")
+                        or line_l.startswith("cpu model\t")
+                        or line_l.startswith("processor model")
+                    ):
                         parts = line.split(":", 1)
                         if len(parts) > 1:
                             v = parts[1].strip()

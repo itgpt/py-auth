@@ -7,7 +7,7 @@ import os
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 _NONCE_LEN = 12
 
@@ -16,6 +16,7 @@ def _aesgcm(key: bytes):
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
     return AESGCM(key)
+
 
 logger = logging.getLogger("py_auth_client")
 
@@ -68,8 +69,8 @@ def _unlink_state_file_quietly(path: Path) -> None:
         pass
 
 
-def load_apps_map(root: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
-    out: Dict[str, Dict[str, Any]] = {}
+def load_apps_map(root: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    out: dict[str, dict[str, Any]] = {}
     for k, v in root.items():
         if k in _RESERVED_ROOT_KEYS:
             continue
@@ -84,7 +85,7 @@ def load_apps_map(root: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
     return out
 
 
-def commit_apps_map(root: Dict[str, Any], apps_map: Dict[str, Dict[str, Any]]) -> None:
+def commit_apps_map(root: dict[str, Any], apps_map: dict[str, dict[str, Any]]) -> None:
     root.pop("apps", None)
     for k in list(root.keys()):
         if k in _RESERVED_ROOT_KEYS:
@@ -95,7 +96,7 @@ def commit_apps_map(root: Dict[str, Any], apps_map: Dict[str, Dict[str, Any]]) -
         root[sn] = dict(row)
 
 
-def row_last_success_ts(row: Optional[Dict[str, Any]]) -> Optional[float]:
+def row_last_success_ts(row: dict[str, Any] | None) -> float | None:
     if not isinstance(row, dict):
         return None
     v = row.get("last_success_at")
@@ -110,7 +111,7 @@ def row_last_success_ts(row: Optional[Dict[str, Any]]) -> Optional[float]:
     return None
 
 
-def row_device_id_str(row: Optional[Dict[str, Any]]) -> Optional[str]:
+def row_device_id_str(row: dict[str, Any] | None) -> str | None:
     if not isinstance(row, dict):
         return None
     v = row.get("device_id")
@@ -123,7 +124,7 @@ def _normalize_server_url(server_url: str) -> str:
     return (server_url or "").strip().rstrip("/")
 
 
-def bundle_path(server_url: str, base_dir: Optional[Path] = None) -> Path:
+def bundle_path(server_url: str, base_dir: Path | None = None) -> Path:
     root = base_dir if base_dir is not None else get_client_storage_root()
     su = _normalize_server_url(server_url)
     sh = hashlib.sha256(su.encode("utf-8")).hexdigest()[:12]
@@ -138,8 +139,8 @@ def _derive_key(server_url: str) -> bytes:
 def read_state_dict(
     server_url: str,
     *,
-    base_dir: Optional[Path] = None,
-) -> Optional[Dict[str, Any]]:
+    base_dir: Path | None = None,
+) -> dict[str, Any] | None:
     path = bundle_path(server_url, base_dir)
     if not path.exists():
         return None
@@ -170,14 +171,16 @@ def read_state_dict(
 
 def write_state_dict(
     server_url: str,
-    data: Dict[str, Any],
+    data: dict[str, Any],
     *,
-    base_dir: Optional[Path] = None,
+    base_dir: Path | None = None,
 ) -> bool:
     path = bundle_path(server_url, base_dir)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        body = json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        body = json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode(
+            "utf-8"
+        )
         key = _derive_key(server_url)
         nonce = os.urandom(_NONCE_LEN)
         aes = _aesgcm(key)

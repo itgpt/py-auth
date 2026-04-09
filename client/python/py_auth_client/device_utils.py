@@ -3,13 +3,12 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import platform
 import socket
 import sys
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional
-
-import platform
+from typing import Any
 
 from .device_platform import (
     apply_os_version_facts,
@@ -17,7 +16,6 @@ from .device_platform import (
     disk_model_for_partition,
     root_disk_mount_and_id,
 )
-from .state_bundle import get_client_storage_root
 
 
 def _processor_arch_normalized() -> str:
@@ -31,7 +29,7 @@ def _processor_arch_normalized() -> str:
     return m or "unknown"
 
 
-def _cpu_model_best() -> Optional[str]:
+def _cpu_model_best() -> str | None:
     if s := cpu_model_platform_specific():
         return s
     raw = platform.processor()
@@ -43,8 +41,8 @@ def _cpu_model_best() -> Optional[str]:
 def load_persisted_device_id(
     server_url: str,
     software_name: str,
-    base_dir: Optional[Path] = None,
-) -> Optional[str]:
+    base_dir: Path | None = None,
+) -> str | None:
     try:
         from .state_bundle import load_apps_map, read_state_dict, row_device_id_str
 
@@ -68,7 +66,7 @@ def persist_device_id(
     server_url: str,
     device_id: str,
     software_name: str,
-    base_dir: Optional[Path] = None,
+    base_dir: Path | None = None,
 ) -> None:
     try:
         from .state_bundle import (
@@ -101,7 +99,7 @@ def persist_device_id(
         pass
 
 
-def _normalize_mac_colon_lower(addr: str) -> Optional[str]:
+def _normalize_mac_colon_lower(addr: str) -> str | None:
     if not addr or not isinstance(addr, str):
         return None
     s = addr.strip().lower().replace("-", ":")
@@ -137,7 +135,7 @@ def _is_common_hyperv_nat_host_ip(ip: str) -> bool:
     return ip.startswith("192.168.117.")
 
 
-def _network_endpoint_score(mac: Optional[str], ip: Optional[str]) -> int:
+def _network_endpoint_score(mac: str | None, ip: str | None) -> int:
     score = 0
     if ip:
         score += 40
@@ -152,7 +150,7 @@ def _network_endpoint_score(mac: Optional[str], ip: Optional[str]) -> int:
     return score
 
 
-def _outbound_ipv4_hint() -> Optional[str]:
+def _outbound_ipv4_hint() -> str | None:
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect(("8.8.8.8", 80))
@@ -170,10 +168,10 @@ def _iface_loopback_name(name: str) -> bool:
     return n == "lo" or "loopback" in n
 
 
-def _sorted_scored_iface_endpoints() -> list[tuple[int, Optional[str], Optional[str]]]:
+def _sorted_scored_iface_endpoints() -> list[tuple[int, str | None, str | None]]:
     import psutil
 
-    out: list[tuple[int, Optional[str], Optional[str]]] = []
+    out: list[tuple[int, str | None, str | None]] = []
     try:
         stats = psutil.net_if_stats()
         addrs_map = psutil.net_if_addrs()
@@ -185,8 +183,8 @@ def _sorted_scored_iface_endpoints() -> list[tuple[int, Optional[str], Optional[
             st = stats.get(name)
             if st is not None and not st.isup:
                 continue
-            mac: Optional[str] = None
-            ip: Optional[str] = None
+            mac: str | None = None
+            ip: str | None = None
             for a in addrs:
                 fam = a.family
                 if fam == socket.AF_INET:
@@ -204,7 +202,7 @@ def _sorted_scored_iface_endpoints() -> list[tuple[int, Optional[str], Optional[
     return out
 
 
-def _preferred_mac_and_ipv4() -> tuple[Optional[str], Optional[str]]:
+def _preferred_mac_and_ipv4() -> tuple[str | None, str | None]:
     candidates = _sorted_scored_iface_endpoints()
     if not candidates:
         return None, _outbound_ipv4_hint()
@@ -216,13 +214,13 @@ def _preferred_mac_and_ipv4() -> tuple[Optional[str], Optional[str]]:
         if mac and ip:
             return mac, ip
 
-    best_ip: Optional[str] = None
+    best_ip: str | None = None
     for _, _, ip in candidates:
         if ip and not ip.startswith("127.") and not ip.startswith("169.254."):
             best_ip = ip
             break
 
-    best_mac: Optional[str] = None
+    best_mac: str | None = None
     for _, mac, _ in candidates:
         if not mac:
             continue
@@ -240,11 +238,11 @@ def _preferred_mac_and_ipv4() -> tuple[Optional[str], Optional[str]]:
     return best_mac, best_ip
 
 
-def _collect_network_interface_rows() -> list[Dict[str, str]]:
+def _collect_network_interface_rows() -> list[dict[str, str]]:
     seen_keys: set[str] = set()
-    out: list[Dict[str, str]] = []
+    out: list[dict[str, str]] = []
     for _, mac, ip in _sorted_scored_iface_endpoints():
-        row: Dict[str, str] = {}
+        row: dict[str, str] = {}
         if mac:
             row["mac_address"] = mac
         if ip:
@@ -257,26 +255,32 @@ def _collect_network_interface_rows() -> list[Dict[str, str]]:
     return out
 
 
-def _mac_from_uuid_node() -> Optional[str]:
+def _mac_from_uuid_node() -> str | None:
     try:
         mac_int = uuid.getnode()
         if (mac_int >> 40) & 1:
             return None
         octets = [
-            "{:02x}".format((mac_int >> elements) & 0xFF) for elements in range(0, 2 * 6, 2)
+            f"{(mac_int >> elements) & 0xFF:02x}"
+            for elements in range(0, 2 * 6, 2)
         ][::-1]
         return _normalize_mac_colon_lower(":".join(octets))
     except Exception:
         return None
 
 
-def get_mac_address() -> Optional[str]:
+def get_mac_address() -> str | None:
     mac, _ = _preferred_mac_and_ipv4()
     return mac or _mac_from_uuid_node()
 
 
 def _disk_volume_map_key(model: str, mount: str, device: str, used: set[str]) -> str:
-    base = (model or "").strip() or (device or "").strip() or (mount or "").strip() or "unknown"
+    base = (
+        (model or "").strip()
+        or (device or "").strip()
+        or (mount or "").strip()
+        or "unknown"
+    )
     k = base
     suffix = 0
     while k in used:
@@ -289,7 +293,7 @@ def _disk_volume_map_key(model: str, mount: str, device: str, used: set[str]) ->
     return k
 
 
-def _windows_disks_powershell() -> Optional[List[Dict[str, Any]]]:
+def _windows_disks_powershell() -> list[dict[str, Any]] | None:
     if sys.platform != "win32":
         return None
     script = r"""$rows = Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3' | ForEach-Object {
@@ -336,19 +340,25 @@ $rows | ConvertTo-Json -Compress -Depth 4"""
     return None
 
 
-def _entries_to_models_map(entries: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+def _entries_to_models_map(entries: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     used: set[str] = set()
-    groups: Dict[str, List[Dict[str, Any]]] = {}
+    groups: dict[str, list[dict[str, Any]]] = {}
     for e in entries:
         m = str(e.get("model") or "").strip()
-        k = m if m else _disk_volume_map_key("", str(e.get("mount") or ""), str(e.get("device") or ""), used)
+        k = (
+            m
+            if m
+            else _disk_volume_map_key(
+                "", str(e.get("mount") or ""), str(e.get("device") or ""), used
+            )
+        )
         groups.setdefault(k, []).append(e)
-    out: Dict[str, Dict[str, Any]] = {}
+    out: dict[str, dict[str, Any]] = {}
     for k, sl in groups.items():
         sl.sort(key=lambda x: str(x.get("mount") or ""))
-        vols: List[Dict[str, Any]] = []
+        vols: list[dict[str, Any]] = []
         for row in sl:
-            v: Dict[str, Any] = {
+            v: dict[str, Any] = {
                 "mount": row["mount"],
                 "total_gb": row["total_gb"],
                 "free_gb": row["free_gb"],
@@ -360,19 +370,23 @@ def _entries_to_models_map(entries: List[Dict[str, Any]]) -> Dict[str, Dict[str,
     return out
 
 
-def _legacy_disk_volumes_to_models(vols: Any) -> Dict[str, Dict[str, Any]]:
+def _legacy_disk_volumes_to_models(vols: Any) -> dict[str, dict[str, Any]]:
     if isinstance(vols, dict) and vols:
-        out: Dict[str, Dict[str, Any]] = {}
+        out: dict[str, dict[str, Any]] = {}
         for key in sorted(vols.keys()):
             item = vols[key]
             if not isinstance(item, dict):
                 continue
-            row = {x: item[x] for x in ("mount", "total_gb", "free_gb", "device") if x in item}
+            row = {
+                x: item[x]
+                for x in ("mount", "total_gb", "free_gb", "device")
+                if x in item
+            }
             out[key] = {"volumes": [row]}
         return out
     if isinstance(vols, list) and vols:
         used: set[str] = set()
-        folded: Dict[str, Dict[str, Any]] = {}
+        folded: dict[str, dict[str, Any]] = {}
         for item in vols:
             if not isinstance(item, dict):
                 continue
@@ -385,10 +399,10 @@ def _legacy_disk_volumes_to_models(vols: Any) -> Dict[str, Dict[str, Any]]:
     return {}
 
 
-def _legacy_disk_disks_to_models(disks: Any) -> Dict[str, Dict[str, Any]]:
+def _legacy_disk_disks_to_models(disks: Any) -> dict[str, dict[str, Any]]:
     if not isinstance(disks, list) or not disks:
         return {}
-    merged: Dict[str, List[Dict[str, Any]]] = {}
+    merged: dict[str, list[dict[str, Any]]] = {}
     for item in disks:
         if not isinstance(item, dict):
             continue
@@ -403,7 +417,7 @@ def _legacy_disk_disks_to_models(disks: Any) -> Dict[str, Dict[str, Any]]:
 
 
 _PUBLIC_IP_URL = "https://ifconfig.icu/ip"
-                                                                                
+
 _PUBLIC_IP_DEADLINE_SEC = 8.0
 
 
@@ -439,7 +453,8 @@ def fetch_public_ip() -> str:
         except ValueError:
             pass
 
-    from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FuturesTimeout
+    from concurrent.futures import ThreadPoolExecutor
+    from concurrent.futures import TimeoutError as _FuturesTimeout
 
     executor = ThreadPoolExecutor(max_workers=1)
     try:
@@ -452,10 +467,10 @@ def fetch_public_ip() -> str:
         executor.shutdown(wait=False)
 
 
-def _facts_psutil_cpu(*, extended: bool) -> Dict[str, Any]:
+def _facts_psutil_cpu(*, extended: bool) -> dict[str, Any]:
     import psutil
 
-    out: Dict[str, Any] = {}
+    out: dict[str, Any] = {}
     try:
         out["cpu_count"] = psutil.cpu_count(logical=True)
         if not extended:
@@ -478,10 +493,10 @@ def _facts_psutil_cpu(*, extended: bool) -> Dict[str, Any]:
     return out
 
 
-def _facts_psutil_memory(*, extended: bool) -> Dict[str, Any]:
+def _facts_psutil_memory(*, extended: bool) -> dict[str, Any]:
     import psutil
 
-    out: Dict[str, Any] = {}
+    out: dict[str, Any] = {}
     try:
         mem = psutil.virtual_memory()
         out["memory_total_gb"] = round(mem.total / (1024**3), 2)
@@ -493,10 +508,10 @@ def _facts_psutil_memory(*, extended: bool) -> Dict[str, Any]:
     return out
 
 
-def _facts_psutil_root_disk_usage(disk_mount: str) -> Dict[str, Any]:
+def _facts_psutil_root_disk_usage(disk_mount: str) -> dict[str, Any]:
     import psutil
 
-    out: Dict[str, Any] = {}
+    out: dict[str, Any] = {}
     try:
         disk_usage = psutil.disk_usage(disk_mount)
         out["disk_total_gb"] = round(disk_usage.total / (1024**3), 2)
@@ -506,7 +521,7 @@ def _facts_psutil_root_disk_usage(disk_mount: str) -> Dict[str, Any]:
     return out
 
 
-def collect_device_facts(*, for_device_id: bool = False) -> Dict[str, Any]:
+def collect_device_facts(*, for_device_id: bool = False) -> dict[str, Any]:
     from concurrent.futures import ThreadPoolExecutor
 
     import psutil
@@ -516,7 +531,7 @@ def collect_device_facts(*, for_device_id: bool = False) -> Dict[str, Any]:
         hn = socket.gethostname()
     except Exception:
         hn = platform.node()
-    facts: Dict[str, Any] = {
+    facts: dict[str, Any] = {
         "system": system,
         "release": platform.release(),
         "version": platform.version(),
@@ -544,7 +559,7 @@ def collect_device_facts(*, for_device_id: bool = False) -> Dict[str, Any]:
         if f_cm is not None:
             if cm := f_cm.result():
                 facts["cpu_model"] = cm
-        win_ps_rows: Optional[List[Dict[str, Any]]] = None
+        win_ps_rows: list[dict[str, Any]] | None = None
         if win_disk_fut is not None:
             try:
                 win_ps_rows = win_disk_fut.result()
@@ -566,7 +581,7 @@ def collect_device_facts(*, for_device_id: bool = False) -> Dict[str, Any]:
         return facts
 
     try:
-        entries: List[Dict[str, Any]] = []
+        entries: list[dict[str, Any]] = []
         if sys.platform == "win32":
             for row in (win_ps_rows or []) or []:
                 mount = str(row.get("Mount") or row.get("mount") or "").strip()
@@ -593,7 +608,7 @@ def collect_device_facts(*, for_device_id: bool = False) -> Dict[str, Any]:
                 )
         if not entries:
             seen_mp: set[str] = set()
-            pending: List[tuple[str, str, float, float]] = []
+            pending: list[tuple[str, str, float, float]] = []
             for p in psutil.disk_partitions(all=False):
                 mp = p.mountpoint
                 if not mp or mp in seen_mp:
@@ -621,7 +636,7 @@ def collect_device_facts(*, for_device_id: bool = False) -> Dict[str, Any]:
                             model = fut.result()
                         except Exception:
                             model = ""
-                        ent: Dict[str, Any] = {
+                        ent: dict[str, Any] = {
                             "model": model,
                             "mount": mp,
                             "total_gb": tg,
@@ -645,10 +660,10 @@ _PERSISTED_DEVICE_ID_NOT_PREFETCHED = object()
 
 def build_device_id(
     server_url: str,
-    provided_device_id: Optional[str],
-    facts: Dict[str, Any],
+    provided_device_id: str | None,
+    facts: dict[str, Any],
     software_name: str = "",
-    base_dir: Optional[Path] = None,
+    base_dir: Path | None = None,
     *,
     persisted_device_id: Any = _PERSISTED_DEVICE_ID_NOT_PREFETCHED,
 ) -> str:
@@ -682,7 +697,11 @@ def build_device_id(
         software_name,
     ]
     filtered = [c for c in components if c]
-    device_id = hashlib.sha256("-".join(filtered).encode()).hexdigest()[:32] if filtered else str(uuid.uuid4())
+    device_id = (
+        hashlib.sha256("-".join(filtered).encode()).hexdigest()[:32]
+        if filtered
+        else str(uuid.uuid4())
+    )
     persist_device_id(
         server_url,
         device_id,
@@ -692,15 +711,17 @@ def build_device_id(
     return device_id
 
 
-def build_device_info(facts: Dict[str, Any], device_info_override: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+def build_device_info(
+    facts: dict[str, Any], device_info_override: dict[str, Any] | None
+) -> dict[str, Any]:
     if device_info_override is not None:
         return device_info_override
 
     from concurrent.futures import ThreadPoolExecutor
 
-    info: Dict[str, Any] = {}
+    info: dict[str, Any] = {}
 
-    system_block: Dict[str, Any] = {}
+    system_block: dict[str, Any] = {}
     if hv := facts.get("hostname_value"):
         system_block["hostname"] = hv
     if os_name := facts.get("system"):
@@ -718,11 +739,11 @@ def build_device_info(facts: Dict[str, Any], device_info_override: Optional[Dict
     if wp := facts.get("windows_product_name"):
         system_block["windows_product_name"] = wp
 
-    cpu_block: Dict[str, Any] = {}
+    cpu_block: dict[str, Any] = {}
     if cm := facts.get("cpu_model"):
         cpu_block["model"] = cm
 
-    memory: Dict[str, Any] = {}
+    memory: dict[str, Any] = {}
     if mem := facts.get("memory_total_gb"):
         memory["total_gb"] = mem
     if mem_avail := facts.get("memory_available_gb"):
@@ -730,8 +751,8 @@ def build_device_info(facts: Dict[str, Any], device_info_override: Optional[Dict
     if mem_free := facts.get("memory_free_gb"):
         memory["free_gb"] = mem_free
 
-    disk_block: Dict[str, Any] = {}
-    models_map: Optional[Dict[str, Any]] = None
+    disk_block: dict[str, Any] = {}
+    models_map: dict[str, Any] | None = None
     if models := facts.get("disk_models"):
         if isinstance(models, dict) and models:
             models_map = models
@@ -785,7 +806,7 @@ def build_device_info(facts: Dict[str, Any], device_info_override: Optional[Dict
         except Exception:
             pass
 
-        iface_rows: list[Dict[str, str]] = []
+        iface_rows: list[dict[str, str]] = []
         try:
             iface_rows = _iface_fut.result()
         except Exception:
@@ -793,7 +814,7 @@ def build_device_info(facts: Dict[str, Any], device_info_override: Optional[Dict
         if not iface_rows:
             iface_rows = []
 
-        network: Dict[str, Any] = {}
+        network: dict[str, Any] = {}
         if mac := facts.get("mac"):
             network["mac_address"] = mac
         if ip := facts.get("ip_address"):
@@ -818,4 +839,3 @@ def build_device_info(facts: Dict[str, Any], device_info_override: Optional[Dict
             pass
 
     return info
-

@@ -2,12 +2,13 @@ import json
 from pathlib import Path
 from typing import Optional
 
-
 from py_auth_client import AuthClient, AuthorizationError
 
 
 def _client_secret() -> Optional[str]:
-    text = (Path(__file__).resolve().parent.parent.parent / ".env").read_text(encoding="utf-8")
+    text = (Path(__file__).resolve().parent.parent.parent / ".env").read_text(
+        encoding="utf-8"
+    )
     for line in text.splitlines():
         s = line.strip()
         if not s or s.startswith("#") or "=" not in s:
