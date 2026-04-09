@@ -261,8 +261,7 @@ def _mac_from_uuid_node() -> str | None:
         if (mac_int >> 40) & 1:
             return None
         octets = [
-            f"{(mac_int >> elements) & 0xFF:02x}"
-            for elements in range(0, 2 * 6, 2)
+            f"{(mac_int >> elements) & 0xFF:02x}" for elements in range(0, 2 * 6, 2)
         ][::-1]
         return _normalize_mac_colon_lower(":".join(octets))
     except Exception:

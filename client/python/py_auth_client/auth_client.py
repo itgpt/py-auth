@@ -333,10 +333,8 @@ class AuthCache:
             apps_m[self._software_name] = sub
             commit_apps_map(d, apps_m)
             any_app_device = any(
-
-                    isinstance(v, dict) and bool(row_device_id_str(v))
-                    for v in apps_m.values()
-
+                isinstance(v, dict) and bool(row_device_id_str(v))
+                for v in apps_m.values()
             )
             if not any_app_device:
                 if self.cache_file.exists():
@@ -1073,10 +1071,8 @@ class AuthorizationError(Exception):
         check_message = self.result.get("message", "").lower() if self.result else ""
         network_keywords = ["连接失败", "连接", "network", "timeout", "connection"]
         return any(
-
-                keyword in check_message or keyword in message_lower
-                for keyword in network_keywords
-
+            keyword in check_message or keyword in message_lower
+            for keyword in network_keywords
         )
 
     @property
